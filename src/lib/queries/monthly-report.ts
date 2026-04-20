@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service';
+import { fetchAllPages } from './paginate';
 
 export interface MonthlyReportData {
   month: string; // YYYY-MM
@@ -62,11 +63,24 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
   const monthEnd = lastDayOfMonth(ym);
 
   // 当月データ（日次 + 月次両方を含む sales_unified_daily）
-  const { data: monthRows } = await supabase
-    .from('sales_unified_daily')
-    .select('sale_date, brand, platform, language, work_id, revenue_jpy, sales_count, aggregation_unit')
-    .gte('sale_date', monthStart)
-    .lte('sale_date', monthEnd);
+  const monthRows = await fetchAllPages<{
+    sale_date: string;
+    brand: string;
+    platform: string;
+    language: string;
+    work_id: string;
+    revenue_jpy: number | null;
+    sales_count: number | null;
+    aggregation_unit: string;
+  }>(
+    supabase,
+    'sales_unified_daily',
+    (q) =>
+      q
+        .select('sale_date, brand, platform, language, work_id, revenue_jpy, sales_count, aggregation_unit')
+        .gte('sale_date', monthStart)
+        .lte('sale_date', monthEnd)
+  );
 
   // 前月・前年同月の総額
   const [prevM, prevY] = [prevMonth(ym), prevYearSame(ym)];
@@ -74,12 +88,12 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
   const prevYStart = `${prevY}-01`, prevYEnd = lastDayOfMonth(prevY);
 
   const sumRange = async (from: string, to: string): Promise<number> => {
-    const { data } = await supabase
-      .from('sales_unified_daily')
-      .select('revenue_jpy')
-      .gte('sale_date', from)
-      .lte('sale_date', to);
-    return (data ?? []).reduce((a, r) => a + (r.revenue_jpy ?? 0), 0);
+    const rows = await fetchAllPages<{ revenue_jpy: number | null }>(
+      supabase,
+      'sales_unified_daily',
+      (q) => q.select('revenue_jpy').gte('sale_date', from).lte('sale_date', to)
+    );
+    return rows.reduce((a, r) => a + (r.revenue_jpy ?? 0), 0);
   };
 
   const [prevMonthTotal, prevYearTotal] = await Promise.all([
@@ -194,15 +208,21 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
 
 /**
  * 利用可能な月リスト（sales_unified_daily に存在する年月を抽出）
+ * Supabase の 1000行制限を超えるのでページング
  */
 export async function getAvailableMonths(): Promise<string[]> {
   const supabase = createServiceClient();
-  const { data } = await supabase
-    .from('sales_unified_daily')
-    .select('sale_date')
-    .order('sale_date', { ascending: false });
-
   const set = new Set<string>();
-  for (const r of data ?? []) set.add(String(r.sale_date).slice(0, 7));
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from('sales_unified_daily')
+      .select('sale_date')
+      .order('sale_date', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    for (const r of data) set.add(String(r.sale_date).slice(0, 7));
+    if (data.length < pageSize) break;
+  }
   return Array.from(set).sort((a, b) => b.localeCompare(a));
 }

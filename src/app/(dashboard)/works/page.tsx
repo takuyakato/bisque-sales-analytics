@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { createServiceClient } from '@/lib/supabase/service';
+import { fetchAllPages } from '@/lib/queries/paginate';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -40,11 +41,12 @@ export default async function WorksPage({ searchParams }: { searchParams: Search
       if (v.work_id) variantCountMap[v.work_id] = (variantCountMap[v.work_id] ?? 0) + 1;
     }
 
-    const { data: sales } = await supabase
-      .from('sales_daily')
-      .select('work_id, net_revenue_jpy')
-      .in('work_id', workIds);
-    for (const s of sales ?? []) {
+    const sales = await fetchAllPages<{ work_id: string | null; net_revenue_jpy: number | null }>(
+      supabase,
+      'sales_daily',
+      (q) => q.select('work_id, net_revenue_jpy').in('work_id', workIds)
+    );
+    for (const s of sales) {
       if (s.work_id) revenueMap[s.work_id] = (revenueMap[s.work_id] ?? 0) + (s.net_revenue_jpy ?? 0);
     }
   }

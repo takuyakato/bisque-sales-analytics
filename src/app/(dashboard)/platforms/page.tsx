@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service';
+import { fetchAllPages } from '@/lib/queries/paginate';
 import { DailyTrendChart } from '@/components/charts/DailyTrendChart';
 import { BarCompareChart } from '@/components/charts/BarCompareChart';
 
@@ -20,15 +21,23 @@ export default async function PlatformsPage() {
   from.setDate(from.getDate() - 180);
   const fromStr = from.toISOString().slice(0, 10);
 
-  const { data: rows } = await supabase
-    .from('sales_unified_daily')
-    .select('sale_date, platform, language, revenue_jpy, sales_count, aggregation_unit')
-    .gte('sale_date', fromStr)
-    .order('sale_date', { ascending: true });
+  const rows = await fetchAllPages<{
+    sale_date: string;
+    platform: string;
+    language: string;
+    revenue_jpy: number | null;
+    sales_count: number | null;
+    aggregation_unit: string;
+  }>(supabase, 'sales_unified_daily', (q) =>
+    q
+      .select('sale_date, platform, language, revenue_jpy, sales_count, aggregation_unit')
+      .gte('sale_date', fromStr)
+      .order('sale_date', { ascending: true })
+  );
 
   // 月次推移（プラットフォーム別）
   const monthlyByPlatform = new Map<string, Record<PlatformKey, number>>();
-  for (const r of rows ?? []) {
+  for (const r of rows) {
     const ym = String(r.sale_date).slice(0, 7);
     const entry = monthlyByPlatform.get(ym) ?? { dlsite: 0, fanza: 0, youtube: 0 };
     const p = r.platform as PlatformKey;
@@ -52,7 +61,7 @@ export default async function PlatformsPage() {
     youtube: {},
   };
   let dlsiteTotal = 0, fanzaTotal = 0, youtubeTotal = 0;
-  for (const r of rows ?? []) {
+  for (const r of rows) {
     if (r.sale_date < from30Str) continue;
     const p = r.platform as PlatformKey;
     if (p !== 'dlsite' && p !== 'fanza' && p !== 'youtube') continue;

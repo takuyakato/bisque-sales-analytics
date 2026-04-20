@@ -21,13 +21,30 @@ export async function generateSnapshots(): Promise<{
   const supabase = createServiceClient();
   await ensureBucket(supabase);
 
-  // --- sales_unified_daily 全行を取得（集約単位を daily と monthly 両方とる） ---
-  const { data: unified } = await supabase
-    .from('sales_unified_daily')
-    .select('sale_date, aggregation_unit, work_id, brand, platform, language, product_id, revenue_jpy, sales_count, views')
-    .order('sale_date', { ascending: true });
-
-  const rows = unified ?? [];
+  // --- sales_unified_daily 全行を取得（1000行制限を超えてページング） ---
+  const rows: Array<{
+    sale_date: string;
+    aggregation_unit: string;
+    work_id: string;
+    brand: string;
+    platform: string;
+    language: string;
+    product_id: string | null;
+    revenue_jpy: number | null;
+    sales_count: number | null;
+    views: number | null;
+  }> = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data: chunk, error } = await supabase
+      .from('sales_unified_daily')
+      .select('sale_date, aggregation_unit, work_id, brand, platform, language, product_id, revenue_jpy, sales_count, views')
+      .order('sale_date', { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error || !chunk || chunk.length === 0) break;
+    rows.push(...chunk);
+    if (chunk.length < pageSize) break;
+  }
   const daily = rows.filter((r) => r.aggregation_unit === 'daily');
   const monthly = rows.filter((r) => r.aggregation_unit === 'monthly');
 

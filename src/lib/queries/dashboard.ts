@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service';
+import { fetchAllPages } from './paginate';
 
 /**
  * ダッシュボード系の集計クエリを一箇所に集約
@@ -54,19 +55,33 @@ export async function getDashboardData() {
   const lastMonthStart = fmtDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
   const lastMonthEnd = fmtDate(new Date(now.getFullYear(), now.getMonth(), 0));
 
-  // 直近30日分を一括取得（日次のみ、VIEWの revenue_jpy を使う）
-  const { data: rows } = await supabase
-    .from('sales_unified_daily')
-    .select('sale_date, brand, platform, language, work_id, revenue_jpy, sales_count')
-    .gte('sale_date', from30)
-    .lte('sale_date', today);
+  // 直近30日分（ページングで1000行制限を超えて取得）
+  const rows = await fetchAllPages<{
+    sale_date: string;
+    brand: string;
+    platform: string;
+    language: string;
+    work_id: string;
+    revenue_jpy: number | null;
+    sales_count: number | null;
+  }>(supabase, 'sales_unified_daily', (q) =>
+    q
+      .select('sale_date, brand, platform, language, work_id, revenue_jpy, sales_count')
+      .gte('sale_date', from30)
+      .lte('sale_date', today)
+  );
 
   // 当月・前月の集計は monthly unit を含めて（過去分を考慮）
-  const { data: monthRows } = await supabase
-    .from('sales_unified_daily')
-    .select('sale_date, revenue_jpy, aggregation_unit')
-    .gte('sale_date', lastMonthStart)
-    .lte('sale_date', today);
+  const monthRows = await fetchAllPages<{
+    sale_date: string;
+    revenue_jpy: number | null;
+    aggregation_unit: string;
+  }>(supabase, 'sales_unified_daily', (q) =>
+    q
+      .select('sale_date, revenue_jpy, aggregation_unit')
+      .gte('sale_date', lastMonthStart)
+      .lte('sale_date', today)
+  );
 
   // KPI
   let todayJpy = 0;
