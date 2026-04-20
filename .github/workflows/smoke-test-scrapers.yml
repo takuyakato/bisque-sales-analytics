@@ -1,0 +1,36 @@
+name: smoke-test-scrapers
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'dlsite or fanza'
+        required: true
+        default: 'dlsite'
+        type: choice
+        options:
+          - dlsite
+          - fanza
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - name: Smoke test (login only)
+        run: npm run scraper:check -- ${{ github.event.inputs.platform }}
+        env:
+          DLSITE_USERNAME: ${{ secrets.DLSITE_USERNAME }}
+          DLSITE_PASSWORD: ${{ secrets.DLSITE_PASSWORD }}
+          FANZA_USERNAME: ${{ secrets.FANZA_USERNAME }}
+          FANZA_PASSWORD: ${{ secrets.FANZA_PASSWORD }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

@@ -1,0 +1,47 @@
+name: scrape-dlsite-daily
+
+on:
+  schedule:
+    # UTC 20:00 = JST 05:00 に前日分を取得
+    - cron: '0 20 * * *'
+  workflow_dispatch: # 手動トリガー可
+
+concurrency:
+  group: dlsite-daily
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run scraper (daily)
+        run: npm run scraper:daily -- dlsite
+        env:
+          DLSITE_USERNAME: ${{ secrets.DLSITE_USERNAME }}
+          DLSITE_PASSWORD: ${{ secrets.DLSITE_PASSWORD }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          USD_JPY_RATE: ${{ vars.USD_JPY_RATE || '150' }}
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlsite-daily-failure-${{ github.run_id }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14

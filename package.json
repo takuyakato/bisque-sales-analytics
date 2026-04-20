@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "scraper:daily": "tsx scripts/scraper-run.ts daily",
+    "scraper:backfill": "tsx scripts/scraper-run.ts backfill",
+    "scraper:check": "tsx scripts/scraper-run.ts check"
   },
   "dependencies": {
     "@notionhq/client": "^5.19.0",
