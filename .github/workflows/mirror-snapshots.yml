@@ -1,0 +1,41 @@
+name: mirror-snapshots
+
+on:
+  schedule:
+    # UTC 22:00 = JST 07:00（スクレイピング＋snapshot 後）
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-snapshots
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Download snapshots
+        run: node scripts/download-snapshots.mjs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/snapshots/ 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "chore: sync snapshots $(date -u +%Y-%m-%d)"
+          git push
