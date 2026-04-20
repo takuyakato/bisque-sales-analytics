@@ -1,16 +1,18 @@
-import type { Page, Download } from 'playwright';
+import type { Download } from 'playwright';
 import { BaseScraper } from './base/scraper';
 import { AuthError, SelectorNotFoundError, TimeoutError } from './base/errors';
 import { DLSITE_SELECTORS } from './config/dlsite-selectors';
 
 /**
- * DLsite サークル管理画面スクレイパー（v3.6 §5-2 準拠）
+ * DLsite サークル管理画面スクレイパー（v3.6 §5-2 準拠、実動作検証済み）
+ *
  * 操作フロー：
- *   1. ログイン（未ログイン時のみ）
- *   2. 売上確認ページへ
- *   3. 期間指定（サークル「すべて」・総合売上・販売サイト「すべて」固定）
- *   4. 「表示」→描画待ち
- *   5. 「CSVダウンロード」→ バイナリ取得
+ *   1. `play.dlsite.com/home/circle/` にアクセス → viviON ID ログインへリダイレクト
+ *   2. ログインフォームに ID/パスワード入力して submit
+ *   3. `/circle/circle/sale/result` へ遷移
+ *   4. フィルタ設定（サークル「すべて」・販売サイト「すべて」・総合売上・日付指定）
+ *   5. 「CSVダウンロード」ボタンをクリック（form action=/index.php 直接 POST）
+ *   6. Download イベントからバイナリ取得（CP932）
  */
 export class DlsiteScraper extends BaseScraper {
   constructor(debug?: boolean) {
@@ -19,16 +21,24 @@ export class DlsiteScraper extends BaseScraper {
 
   static readonly VERSION = DLSITE_SELECTORS.version;
 
+  /**
+   * 売上ページにアクセスして、ログイン画面が出ていないかを判定
+   * ログイン済みなら form#sales_list が見つかる
+   */
   protected async isLoggedIn(): Promise<boolean> {
     if (!this.page) return false;
     try {
-      await this.page.goto(DLSITE_SELECTORS.salesPage.navUrls[0], { waitUntil: 'domcontentloaded' });
-      // successIndicator のいずれか1つが見つかればログイン済み
-      for (const sel of DLSITE_SELECTORS.login.successIndicator) {
-        const visible = await this.page.locator(sel).first().isVisible({ timeout: 2000 }).catch(() => false);
-        if (visible) return true;
-      }
-      return false;
+      await this.page.goto(DLSITE_SELECTORS.salesPage.url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 20000,
+      });
+      // form#sales_list があればログイン済み
+      const exists = await this.page
+        .locator('form#sales_list')
+        .first()
+        .isVisible({ timeout: 3000 })
+        .catch(() => false);
+      return exists;
     } catch {
       return false;
     }
@@ -40,146 +50,143 @@ export class DlsiteScraper extends BaseScraper {
     const username = process.env.DLSITE_USERNAME;
     const password = process.env.DLSITE_PASSWORD;
     if (!username || !password) {
-      throw new AuthError('DLSITE_USERNAME / DLSITE_PASSWORD が環境変数に設定されていません');
+      throw new AuthError('DLSITE_USERNAME / DLSITE_PASSWORD が環境変数にありません');
     }
 
-    await this.page.goto(DLSITE_SELECTORS.login.pageUrl, { waitUntil: 'domcontentloaded' });
+    // 保護ページにアクセス → viviON ID にリダイレクト
+    await this.page.goto(DLSITE_SELECTORS.login.protectedPageUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 20000,
+    });
+    await this.page.waitForTimeout(2000);
 
-    // ユーザー名入力欄を特定
-    const usernameSel = await findFirstVisible(this.page, DLSITE_SELECTORS.login.usernameInput);
-    if (!usernameSel) {
-      throw new SelectorNotFoundError(DLSITE_SELECTORS.login.usernameInput.join(','), 'login.usernameInput');
-    }
-    await this.page.fill(usernameSel, username);
-
-    const passwordSel = await findFirstVisible(this.page, DLSITE_SELECTORS.login.passwordInput);
-    if (!passwordSel) {
-      throw new SelectorNotFoundError(DLSITE_SELECTORS.login.passwordInput.join(','), 'login.passwordInput');
-    }
-    await this.page.fill(passwordSel, password);
-
-    const submitSel = await findFirstVisible(this.page, DLSITE_SELECTORS.login.submitButton);
-    if (!submitSel) {
-      throw new SelectorNotFoundError(DLSITE_SELECTORS.login.submitButton.join(','), 'login.submitButton');
+    // ログインフォーム待機
+    const idLocator = this.page.locator(DLSITE_SELECTORS.login.usernameInput);
+    if (!(await idLocator.first().isVisible({ timeout: 10000 }).catch(() => false))) {
+      throw new SelectorNotFoundError(DLSITE_SELECTORS.login.usernameInput, 'login.usernameInput');
     }
 
-    await Promise.all([
-      this.page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {}),
-      this.page.click(submitSel),
-    ]);
+    await idLocator.first().fill(username);
+    await this.page.locator(DLSITE_SELECTORS.login.passwordInput).first().fill(password);
+    await this.page.locator(DLSITE_SELECTORS.login.submitButton).first().click();
 
-    // ログイン成功指標を確認
-    let ok = false;
-    for (const sel of DLSITE_SELECTORS.login.successIndicator) {
-      const visible = await this.page.locator(sel).first().isVisible({ timeout: 5000 }).catch(() => false);
-      if (visible) { ok = true; break; }
-    }
+    // ログイン後の遷移待ち
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {});
+    await this.page.waitForTimeout(3000);
+
+    // 売上ページへ遷移して form#sales_list の存在で成功判定
+    const ok = await this.isLoggedIn();
     if (!ok) {
-      throw new AuthError('ログイン後のサイドバーを検出できません（ID/パスワード間違い、または画面構造の変化）');
+      throw new AuthError('ログイン後に売上ページ（form#sales_list）を検出できません');
     }
   }
 
   /**
-   * 期間を指定して売上CSVをダウンロードする
+   * 期間を指定して売上CSVをダウンロード
    * @param from YYYY-MM-DD
    * @param to   YYYY-MM-DD
-   * @returns CSVのバイナリ（CP932エンコード）
+   * @returns CSV バイナリ（CP932）
    */
   async fetchSalesCsv(from: string, to: string): Promise<Buffer> {
     if (!this.page) throw new Error('launch() を先に呼んでください');
-
     const page = this.page;
 
-    // 売上確認ページへ
-    let navigated = false;
-    for (const url of DLSITE_SELECTORS.salesPage.navUrls) {
-      try {
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-        navigated = true;
-        break;
-      } catch {
-        // 次の候補を試す
-      }
+    // 売上ページへ（ログイン済みCookie前提）
+    await page.goto(DLSITE_SELECTORS.salesPage.url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 20000,
+    });
+    await page.waitForTimeout(2000);
+
+    // form が見えるか
+    const formOk = await page
+      .locator('form#sales_list')
+      .first()
+      .isVisible({ timeout: 5000 })
+      .catch(() => false);
+    if (!formOk) throw new SelectorNotFoundError('form#sales_list', 'salesPage.form');
+
+    const sel = DLSITE_SELECTORS.filterForm;
+
+    // フィルタ設定：すべて・総合売上・日付指定
+    await page.locator(sel.circleSelect).selectOption({ value: sel.circleAllValue });
+    await page.locator(sel.marketPlaceSelect).selectOption({ value: sel.marketPlaceAllValue });
+    await page.locator(sel.salesTypeSelect).selectOption({ value: sel.salesTypeDefaultValue });
+    await page.locator(sel.termTypeSelect).selectOption({ value: sel.termTypeDateValue });
+
+    // 日付入力（date 選択後に表示される、flatpickr 管理のフィールド）
+    // flatpickr はイベント経由でのみ値更新するので、dispatchEvent + blur で確定
+    await page.waitForTimeout(500);
+    await setFlatpickrDate(page, sel.dateStartInput, from);
+    await setFlatpickrDate(page, sel.dateEndInput, to);
+
+    // 開いたままのカレンダーを閉じる
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    await page.locator('body').click({ position: { x: 10, y: 10 } }).catch(() => {});
+    await page.waitForTimeout(300);
+
+    // 「表示」を先にクリックして結果ページを確定させる（2段階フロー）
+    await page.locator(sel.displayButton).first().click();
+    await page.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+
+    // 再度 CSV ボタンの存在を確認し、クリック
+    const csvBtn = page.locator(sel.csvDownloadButton).first();
+    const csvVisible = await csvBtn.isVisible({ timeout: 5000 }).catch(() => false);
+    if (!csvVisible) {
+      throw new SelectorNotFoundError(sel.csvDownloadButton, 'csvDownloadButton (after display)');
     }
-    if (!navigated) throw new Error('売上確認ページに到達できません');
 
-    // フィルタ設定
-    await setSelectByLabelOrValue(page, DLSITE_SELECTORS.filterForm.circleSelect, DLSITE_SELECTORS.filterForm.circleValue, 'すべて');
-    await setSelectByLabelOrValue(page, DLSITE_SELECTORS.filterForm.revenueTypeSelect, null, DLSITE_SELECTORS.filterForm.revenueTypeLabel);
-    await setSelectByLabelOrValue(page, DLSITE_SELECTORS.filterForm.salesSiteSelect, DLSITE_SELECTORS.filterForm.salesSiteValue, 'すべて');
-    await setSelectByLabelOrValue(page, DLSITE_SELECTORS.filterForm.periodTypeSelect, null, DLSITE_SELECTORS.filterForm.periodTypeLabel);
-
-    // 日付入力
-    const fromSel = await findFirstVisible(page, DLSITE_SELECTORS.filterForm.dateFromInput);
-    const toSel = await findFirstVisible(page, DLSITE_SELECTORS.filterForm.dateToInput);
-    if (!fromSel || !toSel) {
-      throw new SelectorNotFoundError('dateFromInput / dateToInput', 'filterForm.date');
-    }
-    await page.fill(fromSel, from);
-    await page.fill(toSel, to);
-
-    // 「表示」ボタン
-    const displaySel = await findFirstVisible(page, DLSITE_SELECTORS.filterForm.displayButton);
-    if (!displaySel) {
-      throw new SelectorNotFoundError('displayButton', 'filterForm.display');
-    }
-    await page.click(displaySel);
-
-    // 結果描画待ち
+    // CSVダウンロードボタンをクリック → download イベント待ち
+    let download: Download;
     try {
-      await page.locator(DLSITE_SELECTORS.result.loadedSignal).first().waitFor({ timeout: 15000 });
-    } catch {
-      throw new TimeoutError('result.loadedSignal', 15000);
+      [download] = await Promise.all([
+        page.waitForEvent('download', { timeout: 30000 }),
+        csvBtn.click(),
+      ]);
+    } catch (e) {
+      // download イベントが来ない場合はセレクタorタイムアウトの問題
+      if (e instanceof Error && /Timeout/i.test(e.message)) {
+        throw new TimeoutError('csvDownload.event', 30000);
+      }
+      throw e;
     }
 
-    // CSVダウンロード
-    const csvSel = await findFirstVisible(page, DLSITE_SELECTORS.filterForm.csvDownloadButton);
-    if (!csvSel) {
-      throw new SelectorNotFoundError('csvDownloadButton', 'filterForm.csvDownload');
-    }
-
-    const [download] = await Promise.all([
-      page.waitForEvent('download', { timeout: 30000 }),
-      page.click(csvSel),
-    ]);
     return readDownload(download);
   }
 }
 
-async function findFirstVisible(page: Page, selectors: readonly string[] | string): Promise<string | null> {
-  const arr = Array.isArray(selectors) ? selectors : [selectors];
-  for (const sel of arr) {
-    const visible = await page.locator(sel).first().isVisible({ timeout: 1500 }).catch(() => false);
-    if (visible) return sel;
-  }
-  return null;
-}
-
-async function setSelectByLabelOrValue(
-  page: Page,
-  selectSelector: string,
-  value: string | null,
-  label: string | null
+/**
+ * flatpickr が管理する日付入力に値を確実に反映させる
+ */
+async function setFlatpickrDate(
+  page: import('playwright').Page,
+  selector: string,
+  value: string
 ): Promise<void> {
-  const exists = await page.locator(selectSelector).first().isVisible({ timeout: 2000 }).catch(() => false);
-  if (!exists) return; // フィールドが存在しなければスキップ（UI差分吸収）
+  // flatpickr インスタンス経由で setDate を呼ぶのが最も確実
+  const set = await page.evaluate(
+    ({ sel, v }) => {
+      const el = document.querySelector(sel) as HTMLInputElement | null;
+      if (!el) return { ok: false, reason: 'element not found' };
 
-  const locator = page.locator(selectSelector).first();
-  if (value !== null && value !== undefined) {
-    try {
-      await locator.selectOption({ value });
-      return;
-    } catch {
-      /* fall through to label */
-    }
-  }
-  if (label) {
-    try {
-      await locator.selectOption({ label });
-    } catch {
-      /* ignore */
-    }
-  }
+      // flatpickr インスタンスが要素に紐付いている場合
+      const fp = (el as unknown as { _flatpickr?: { setDate: (d: string) => void } })._flatpickr;
+      if (fp && typeof fp.setDate === 'function') {
+        fp.setDate(v);
+        return { ok: true, via: 'flatpickr' };
+      }
+
+      // フォールバック: value セット + input/change イベント
+      el.value = v;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true, via: 'fallback' };
+    },
+    { sel: selector, v: value }
+  );
+  if (!set.ok) throw new Error(`setFlatpickrDate failed for ${selector}: ${set.reason ?? 'unknown'}`);
 }
 
 async function readDownload(download: Download): Promise<Buffer> {

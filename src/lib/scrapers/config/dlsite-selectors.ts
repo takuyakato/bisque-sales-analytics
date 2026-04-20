@@ -1,81 +1,52 @@
 /**
- * DLsite セレクター定義（v3.6準拠）
+ * DLsite セレクター定義（v3.6準拠、実動作検証済み）
  *
- * Phase 0 の draft（scripts/phase0/config/dlsite-selectors.draft.ts）を本体に昇格。
+ * 実測で判明した構造:
+ *   - ログイン: 保護ページ `play.dlsite.com/home/circle/` へアクセス → viviON ID にリダイレクト
+ *     - input[name="login_id"] / input[name="password"]
+ *     - button:has-text("ログイン")
+ *   - 売上ページ: https://www.dlsite.com/circle/circle/sale/result
+ *     - form#sales_list（action="https://www.dlsite.com/index.php" method="post"）
+ *     - セレクト: circle_list, market_place, sales_type, term_type
+ *     - 日付: input[name="date_start"] / input[name="date_end"]
+ *     - ボタン: input[name="search"][value="表示"] と input[name="csv"][value="CSVダウンロード"]（両方同一フォーム内）
+ *
  * UI変更時はこのファイルだけ直す。version を更新すると ingestion_log.source_version で追跡される。
- *
- * 操作フロー（スクリーンショットから確定）:
- *   1. ログイン（サークル管理画面の認証）
- *   2. 売上確認ページへ遷移（dlsite.com/index.php）
- *   3. サークル選択: 「すべて」
- *   4. 売上区分: 「総合売上」
- *   5. 販売サイト: 「すべて」
- *   6. 期間: 「日付を指定する」を選択
- *   7. from日付、to日付をセット
- *   8. 「表示」ボタンをクリック
- *   9. 結果表示後に「CSVダウンロード」ボタンでDL
  */
 
 export const DLSITE_SELECTORS = {
-  version: '2026-04-20',
+  version: '2026-04-20b',
 
   login: {
-    pageUrl: 'https://play.dlsite.com/home/circle/=/login',
-    // フォールバック：サークル管理トップにアクセスすれば未ログインならログインフォームに飛ばされる
-    fallbackUrl: 'https://play.dlsite.com/',
-    usernameInput: [
-      'input[name="login_id"]',
-      'input[name="email"]',
-      'input[type="email"]',
-      'input[id*="login"]',
-    ],
-    passwordInput: ['input[name="password"]', 'input[type="password"]'],
-    submitButton: [
-      'button[type="submit"]',
-      'button:has-text("ログイン")',
-      'input[type="submit"]',
-    ],
-    // ログイン成功指標：サイドバーの「売上確認」
-    successIndicator: [
-      'text=売上確認',
-      'text=作品管理',
-      '[href*="circle"][href*="index"]',
-    ],
+    // 保護ページへアクセスすると viviON ID ログインにリダイレクト
+    protectedPageUrl: 'https://play.dlsite.com/home/circle/',
+    usernameInput: 'input[name="login_id"]',
+    passwordInput: 'input[name="password"]',
+    submitButton: 'button:has-text("ログイン")',
+    // ログイン成功指標：URL が /library 等へ変わる、もしくはログインフォームが消える
   },
 
   salesPage: {
-    // 売上確認画面の直URL（複数候補）
-    navUrls: [
-      'https://play.dlsite.com/home/circle/=/index',
-      'https://play.dlsite.com/home/circle/=/index.php',
-    ],
-    navLink: 'a:has-text("売上確認")',
+    url: 'https://www.dlsite.com/circle/circle/sale/result',
   },
 
   filterForm: {
-    circleSelect: 'select[name="circle_id"]',
-    circleValue: '',
-    revenueTypeSelect: 'select[name="revenue_type"]',
-    revenueTypeLabel: '総合売上',
-    salesSiteSelect: 'select[name="sales_site"]',
-    salesSiteValue: '',
-    periodTypeSelect: 'select[name="period_type"]',
-    periodTypeLabel: '日付を指定する',
-    dateFromInput: ['input[name="date_from"]', 'input[name="start_date"]'],
-    dateToInput: ['input[name="date_to"]', 'input[name="end_date"]'],
-    displayButton: ['button:has-text("表示")', 'input[type="submit"][value="表示"]'],
-    csvDownloadButton: [
-      'button:has-text("CSVダウンロード")',
-      'a:has-text("CSVダウンロード")',
-      'button:has-text("CSV")',
-    ],
+    circleSelect: 'select[name="circle_list"]',
+    circleAllValue: '0', // 「すべて」
+    marketPlaceSelect: 'select[name="market_place"]',
+    marketPlaceAllValue: '0',
+    salesTypeSelect: 'select[name="sales_type"]',
+    salesTypeDefaultValue: '0', // 総合売上
+    termTypeSelect: 'select[name="term_type"]',
+    termTypeDateValue: 'date', // 日付を指定する
+    dateStartInput: 'input[name="date_start"]',
+    dateEndInput: 'input[name="date_end"]',
+    displayButton: 'input[type="submit"][name="search"]',
+    csvDownloadButton: 'input[type="submit"][name="csv"]',
   },
 
-  /**
-   * 結果テーブル描画完了のサイン
-   * 「N本」「N円」のような数字テキストが現れれば描画済みと判定
-   */
+  // 結果描画完了のサイン（売上数字が出る）
   result: {
-    loadedSignal: 'text=/[0-9,]+[本円]/',
+    loadedSignal: 'text=/[0-9,]+\\s*[本円]/',
   },
 } as const;
