@@ -1,0 +1,41 @@
+name: scrape-fanza-daily
+
+on:
+  schedule:
+    # UTC 20:15 = JST 05:15（DLsite の15分後）
+    - cron: '15 20 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: fanza-daily
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run scraper (fanza daily)
+        run: npm run scraper:daily -- fanza
+        env:
+          FANZA_USERNAME: ${{ secrets.FANZA_USERNAME }}
+          FANZA_PASSWORD: ${{ secrets.FANZA_PASSWORD }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          USD_JPY_RATE: ${{ vars.USD_JPY_RATE || '150' }}
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanza-daily-failure-${{ github.run_id }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14

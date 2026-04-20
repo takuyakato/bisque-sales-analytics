@@ -11,10 +11,12 @@
 import { readFileSync } from 'fs';
 import path from 'path';
 import { DlsiteScraper } from '../src/lib/scrapers/dlsite';
+import { FanzaScraper } from '../src/lib/scrapers/fanza';
 import { parseCsv } from '../src/lib/csv-parser/index';
 import { ingestCsvRows } from '../src/lib/ingestion/csv-ingest';
 import { ScraperLogger } from '../src/lib/scrapers/base/logger';
 import { ScraperError } from '../src/lib/scrapers/base/errors';
+import type { BaseScraper } from '../src/lib/scrapers/base/scraper';
 
 // .env.local を読む（ローカル実行時）
 try {
@@ -85,9 +87,32 @@ function* monthRange(from: string, to: string): Generator<{ from: string; to: st
   }
 }
 
-async function runDlsiteOnce(from: string, to: string, version: string) {
-  const scraper = new DlsiteScraper();
-  const logger = new ScraperLogger('dlsite', process.env.GITHUB_ACTIONS ? 'github-actions' : 'manual', version);
+interface ScraperConstructor {
+  new (debug?: boolean): BaseScraper & {
+    fetchSalesCsv: (from: string, to: string) => Promise<Buffer>;
+  };
+  VERSION: string;
+}
+
+function getScraperClass(platform: Platform): ScraperConstructor {
+  switch (platform) {
+    case 'dlsite':
+      return DlsiteScraper as unknown as ScraperConstructor;
+    case 'fanza':
+      return FanzaScraper as unknown as ScraperConstructor;
+    default:
+      throw new Error(`unsupported platform: ${platform}`);
+  }
+}
+
+async function runScrapeOnce(platform: Platform, from: string, to: string, version: string) {
+  const ScraperClass = getScraperClass(platform);
+  const scraper = new ScraperClass();
+  const logger = new ScraperLogger(
+    platform,
+    process.env.GITHUB_ACTIONS ? 'github-actions' : 'manual',
+    version
+  );
   let screenshotPath: string | undefined;
   let errorMessage: string | undefined;
   const counts = { inserted: 0, updated: 0, skipped: 0 };
@@ -105,14 +130,14 @@ async function runDlsiteOnce(from: string, to: string, version: string) {
     logger.step('parse-csv', { size: csvBuffer.byteLength });
     const parsed = parseCsv({
       buffer: csvBuffer,
-      filename: `dlsite_${from}_${to}.csv`,
-      platform: 'dlsite',
+      filename: `${platform}_${from}_${to}.csv`,
+      platform,
       periodOverride: { from, to },
     });
     logger.step('parse-done', { rows: parsed.rows.length, skipped: parsed.skipped });
 
     const ingestResult = await ingestCsvRows({
-      platform: 'dlsite',
+      platform,
       rows: parsed.rows,
       periodFrom: from,
       periodTo: to,
@@ -142,16 +167,12 @@ async function runDlsiteOnce(from: string, to: string, version: string) {
 
 async function main() {
   const args = parseArgs();
-  const version = DlsiteScraper.VERSION;
+  const ScraperClass = getScraperClass(args.platform);
+  const version = ScraperClass.VERSION;
 
   if (args.mode === 'check') {
-    // smoke test: ログインだけ試行
     console.log(`=== scraper:check ${args.platform} (v${version}) ===`);
-    if (args.platform !== 'dlsite') {
-      console.log('Fanza check はPhase 1eで実装');
-      return;
-    }
-    const scraper = new DlsiteScraper();
+    const scraper = new ScraperClass();
     try {
       await scraper.launch();
       await scraper.ensureLoggedIn();
@@ -167,16 +188,10 @@ async function main() {
     return;
   }
 
-  if (args.platform !== 'dlsite') {
-    console.log(`Phase 1d では dlsite のみ対応。Fanzaは Phase 1e。`);
-    process.exitCode = 1;
-    return;
-  }
-
   if (args.mode === 'daily') {
     const { from, to } = yesterdayJst();
-    console.log(`=== scraper:daily dlsite (${from}) v${version} ===`);
-    const r = await runDlsiteOnce(from, to, version);
+    console.log(`=== scraper:daily ${args.platform} (${from}) v${version} ===`);
+    const r = await runScrapeOnce(args.platform, from, to, version);
     console.log('結果:', r);
     if (r.status === 'failed') process.exitCode = 1;
     return;
@@ -184,29 +199,23 @@ async function main() {
 
   if (args.mode === 'backfill') {
     if (!args.from || !args.to) throw new Error('backfill には --from=YYYY-MM --to=YYYY-MM が必須');
-    console.log(`=== scraper:backfill dlsite ${args.from}..${args.to} unit=${args.unit} v${version} ===`);
+    console.log(`=== scraper:backfill ${args.platform} ${args.from}..${args.to} unit=${args.unit} v${version} ===`);
     if (args.unit === 'monthly') {
       for (const range of monthRange(args.from, args.to)) {
         console.log(`\n→ ${range.from} 〜 ${range.to}`);
-        const r = await runDlsiteOnce(range.from, range.to, version);
+        const r = await runScrapeOnce(args.platform, range.from, range.to, version);
         console.log('  結果:', r.status, r.counts);
-        // レート制限回避
         await new Promise((res) => setTimeout(res, 1500));
       }
     } else {
-      // daily unit
       const [fy, fm] = args.from.split('-').map(Number);
       const [ty, tm] = args.to.split('-').map(Number);
       const startDate = new Date(fy, fm - 1, 1);
-      const endDate = new Date(ty, tm, 0); // 月末
-      for (
-        let d = new Date(startDate);
-        d <= endDate;
-        d.setDate(d.getDate() + 1)
-      ) {
+      const endDate = new Date(ty, tm, 0);
+      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
         const iso = d.toISOString().slice(0, 10);
         console.log(`\n→ ${iso}`);
-        const r = await runDlsiteOnce(iso, iso, version);
+        const r = await runScrapeOnce(args.platform, iso, iso, version);
         console.log('  結果:', r.status, r.counts);
         await new Promise((res) => setTimeout(res, 1500));
       }

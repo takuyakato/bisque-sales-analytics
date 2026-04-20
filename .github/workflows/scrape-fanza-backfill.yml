@@ -1,0 +1,44 @@
+name: scrape-fanza-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: '開始年月 YYYY-MM'
+        required: true
+      to:
+        description: '終了年月 YYYY-MM'
+        required: true
+      unit:
+        description: 'daily or monthly'
+        required: true
+        default: 'monthly'
+        type: choice
+        options:
+          - monthly
+          - daily
+
+concurrency:
+  group: fanza-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run scraper (fanza backfill)
+        run: npm run scraper:backfill -- fanza --from=${{ github.event.inputs.from }} --to=${{ github.event.inputs.to }} --unit=${{ github.event.inputs.unit }}
+        env:
+          FANZA_USERNAME: ${{ secrets.FANZA_USERNAME }}
+          FANZA_PASSWORD: ${{ secrets.FANZA_PASSWORD }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          USD_JPY_RATE: ${{ vars.USD_JPY_RATE || '150' }}
