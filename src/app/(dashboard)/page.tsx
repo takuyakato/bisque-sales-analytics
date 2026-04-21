@@ -52,7 +52,7 @@ export default async function Dashboard() {
         <KpiCard
           label="今月累計"
           value={fmt(data.kpi.thisMonthJpy)}
-          sub={`前月: ${fmt(data.kpi.lastMonthJpy)} (${pct(data.kpi.thisMonthJpy, data.kpi.lastMonthJpy)})`}
+          sub={`前月同日まで: ${fmt(data.kpi.prevMonthUntilSameDayJpy)} (${pct(data.kpi.thisMonthJpy, data.kpi.prevMonthUntilSameDayJpy)})`}
         />
         <KpiCard
           label="前月同日まで比"
