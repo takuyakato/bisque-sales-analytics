@@ -55,7 +55,7 @@ export async function getDashboardData() {
 
 const _getDashboardDataCached = unstable_cache(
   async (_todayKey: string) => _getDashboardDataImpl(),
-  ['dashboard-data', 'v3'],
+  ['dashboard-data', 'v4'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
@@ -116,10 +116,6 @@ async function _getDashboardDataImpl() {
     }
     monthlyByPlatform.set(r.year_month, entry);
   }
-  const monthlySeries = Array.from(monthlyByPlatform.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-24)
-    .map(([date, e]) => ({ date, dlsite: e.dlsite, fanza: e.fanza, youtube: e.youtube }));
 
   // KPI
   let last30dJpy = 0;
@@ -136,12 +132,19 @@ async function _getDashboardDataImpl() {
     last30dJpy += r.revenue_jpy ?? 0;
   }
 
-  // 日付ごとの売上（着地見込み計算のため）
+  // 日付ごとの売上（着地見込み計算のため）/ 今月分プラットフォーム別（マテビュー遅延対策）
   const dailyRevenue: Record<string, number> = {};
+  const currentMonthPlatform = { dlsite: 0, fanza: 0, youtube: 0 };
   for (const r of monthRows ?? []) {
     const v = r.revenue_jpy ?? 0;
     dailyRevenue[r.sale_date] = (dailyRevenue[r.sale_date] ?? 0) + v;
-    if (r.sale_date >= monthStart) thisMonthJpy += v;
+    if (r.sale_date >= monthStart) {
+      thisMonthJpy += v;
+      const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
+      if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
+        currentMonthPlatform[p] += v;
+      }
+    }
     if (r.sale_date >= lastMonthStart && r.sale_date <= lastMonthEnd) lastMonthJpy += v;
     if (r.sale_date >= lastMonthStart && r.sale_date <= lastMonthSameDay) {
       prevMonthUntilSameDayJpy += v;
@@ -162,7 +165,23 @@ async function _getDashboardDataImpl() {
     const lastDataDay = Number(lastDataDate.slice(8, 10));
     daysRemaining = daysInThisMonth - lastDataDay;
   }
-  const expectedMonthEndJpy = Math.round(thisMonthJpy + past3DaysAvg * daysRemaining);
+  const forecastTailJpy = Math.round(past3DaysAvg * daysRemaining);
+  const expectedMonthEndJpy = thisMonthJpy + forecastTailJpy;
+
+  // 今月分はマテビューの遅延を避けるため日次データで上書き、着地見込み分を forecast フィールドに載せる
+  const currentMonthKey = monthStart.slice(0, 7);
+  monthlyByPlatform.set(currentMonthKey, currentMonthPlatform);
+
+  const monthlySeries = Array.from(monthlyByPlatform.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-24)
+    .map(([date, e]) => ({
+      date,
+      dlsite: e.dlsite,
+      fanza: e.fanza,
+      youtube: e.youtube,
+      forecast: date === currentMonthKey ? forecastTailJpy : 0,
+    }));
 
   const kpi: KpiSummary = {
     last30dJpy,

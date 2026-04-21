@@ -9,6 +9,10 @@ const PLATFORM_STACKS = [
   { dataKey: 'fanza', label: 'Fanza', color: '#dc2626' },
   { dataKey: 'youtube', label: 'YouTube', color: '#ef4444' },
 ];
+const MONTHLY_STACKS = [
+  ...PLATFORM_STACKS,
+  { dataKey: 'forecast', label: '着地見込み（予測）', color: '#9ca3af' },
+];
 const LANGUAGE_STACKS = [
   { dataKey: '日本語', label: '日本語', color: '#2563eb' },
   { dataKey: '英語', label: '英語', color: '#f59e0b' },
@@ -77,10 +81,10 @@ export default async function Dashboard() {
 <StackedBarChart data={data.dailyLanguageSeries} xKey="date" stacks={LANGUAGE_STACKS} />
       </div>
 
-      {/* 月次推移（過去24か月・プラットフォーム積み上げ） */}
+      {/* 月次推移（過去24か月・プラットフォーム積み上げ＋最新月は着地見込みを予測色で追加） */}
       <div className="bg-white rounded-lg shadow p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">月次推移（過去24か月・プラットフォーム別）</h2>
-        <StackedBarChart data={data.monthlySeries} xKey="date" stacks={PLATFORM_STACKS} />
+        <StackedBarChart data={data.monthlySeries} xKey="date" stacks={MONTHLY_STACKS} />
       </div>
 
       {/* 3カラム: 言語別・レーベル別・プラットフォーム別（直近30日の構成） */}
