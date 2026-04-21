@@ -54,7 +54,7 @@ export async function getDashboardData() {
 
 const _getDashboardDataCached = unstable_cache(
   async (_todayKey: string) => _getDashboardDataImpl(),
-  ['dashboard-data', 'v1'],
+  ['dashboard-data', 'v2'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
