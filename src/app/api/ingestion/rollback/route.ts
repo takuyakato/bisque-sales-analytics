@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireAuth } from '@/lib/auth/require';
 
 export const runtime = 'nodejs';
 
@@ -13,6 +14,8 @@ const BodySchema = z.object({
  * 指定された ingestion_log_id に紐付く sales_daily 行を全削除、ingestion_log にもマーク
  */
 export async function POST(request: NextRequest) {
+  const unauth = await requireAuth(request);
+  if (unauth) return unauth;
   try {
     const body = await request.json();
     const parsed = BodySchema.safeParse(body);

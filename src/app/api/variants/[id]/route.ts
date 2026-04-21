@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireAuth } from '@/lib/auth/require';
 
 export const runtime = 'nodejs';
 
@@ -14,6 +15,8 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  const unauth = await requireAuth(request);
+  if (unauth) return unauth;
   const { id } = await context.params;
   try {
     const body = await request.json();

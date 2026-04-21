@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { createServiceClient } from '@/lib/supabase/service';
 import { WorkEditor } from './WorkEditor';
+import { languageLabel } from '@/lib/utils/language-label';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -25,20 +26,26 @@ export default async function WorkDetail({ params }: { params: Params }) {
     .eq('work_id', id)
     .order('created_at', { ascending: true });
 
-  const { data: sales } = await supabase
-    .from('sales_daily')
-    .select('sale_date, aggregation_unit, platform, sales_count, net_revenue_jpy, sales_price_jpy')
-    .eq('work_id', id)
-    .order('sale_date', { ascending: false });
+  // sales_daily は variant_id で関連づけるため、work の variants 経由で取得
+  const variantIds = (variants ?? []).map((v) => v.id);
+  const { data: sales } = variantIds.length
+    ? await supabase
+        .from('sales_daily')
+        .select('sale_date, aggregation_unit, variant_id, sales_count, net_revenue_jpy, sales_price_jpy')
+        .in('variant_id', variantIds)
+        .order('sale_date', { ascending: false })
+    : { data: [] };
+  // variant_id → platform マップ（sales_daily に platform が無くなった代替）
+  const variantPlatform = new Map((variants ?? []).map((v) => [v.id, v.platform]));
 
   const totalRevenue = (sales ?? []).reduce((a, s) => a + (s.net_revenue_jpy ?? 0), 0);
   const totalCount = (sales ?? []).reduce((a, s) => a + (s.sales_count ?? 0), 0);
 
-  // 言語別内訳（このworkの variants と sales を JOIN して計算）
+  // 言語別内訳（variant_id で正確に集計）
+  const variantMap = new Map((variants ?? []).map((v) => [v.id, v]));
   const langRevenue: Record<string, number> = {};
   for (const s of sales ?? []) {
-    const v = variants?.find((x) => x.platform === s.platform);
-    // variant_idベースでない簡易マッピング（同一作品・同一プラットフォーム）
+    const v = s.variant_id ? variantMap.get(s.variant_id) : undefined;
     if (v) langRevenue[v.language] = (langRevenue[v.language] ?? 0) + (s.net_revenue_jpy ?? 0);
   }
 
@@ -78,7 +85,7 @@ export default async function WorkDetail({ params }: { params: Params }) {
                     <td className="py-2 max-w-xs truncate" title={v.product_title ?? ''}>
                       {v.product_title}
                     </td>
-                    <td className="py-2 text-center">{v.language}</td>
+                    <td className="py-2 text-center">{languageLabel(v.language)}</td>
                     <td className="py-2 text-center text-gray-500">{v.origin_status}</td>
                   </tr>
                 ))}
@@ -112,7 +119,7 @@ export default async function WorkDetail({ params }: { params: Params }) {
                   <tr key={i} className="border-b border-gray-100">
                     <td className="py-2">{s.sale_date}</td>
                     <td className="py-2 text-gray-500">{s.aggregation_unit}</td>
-                    <td className="py-2">{s.platform}</td>
+                    <td className="py-2">{s.variant_id ? variantPlatform.get(s.variant_id) : '—'}</td>
                     <td className="py-2 text-right">¥{s.sales_price_jpy ?? 0}</td>
                     <td className="py-2 text-right">{s.sales_count}</td>
                     <td className="py-2 text-right font-semibold">{fmt(s.net_revenue_jpy ?? 0)}</td>

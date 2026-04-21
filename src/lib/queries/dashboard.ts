@@ -1,5 +1,7 @@
+import { unstable_cache } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
 import { fetchAllPages } from './paginate';
+import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
 
 /**
  * ダッシュボード系の集計クエリを一箇所に集約
@@ -11,7 +13,8 @@ export interface KpiSummary {
   last30dJpy: number;
   thisMonthJpy: number;
   lastMonthJpy: number;
-  prevMonthSameDayJpy: number;
+  /** 前月の月初〜前月同日までの累計 */
+  prevMonthUntilSameDayJpy: number;
 }
 
 export interface GroupedTotal {
@@ -41,8 +44,21 @@ function fmtDate(d: Date): string {
 
 /**
  * ダッシュボード用のデータを1セット取得
+ * unstable_cache で 10分キャッシュ＋取込完了時に 'sales-data' タグで破棄
+ * キャッシュキーに日付を含めて日をまたいだときに自動で別エントリにする
  */
 export async function getDashboardData() {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  return _getDashboardDataCached(todayKey);
+}
+
+const _getDashboardDataCached = unstable_cache(
+  async (_todayKey: string) => _getDashboardDataImpl(),
+  ['dashboard-data', 'v1'],
+  { revalidate: 600, tags: ['sales-data'] }
+);
+
+async function _getDashboardDataImpl() {
   const supabase = createServiceClient();
   const now = new Date();
   const today = fmtDate(now);
@@ -55,7 +71,9 @@ export async function getDashboardData() {
   const lastMonthStart = fmtDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
   const lastMonthEnd = fmtDate(new Date(now.getFullYear(), now.getMonth(), 0));
 
-  // 直近30日分（ページングで1000行制限を超えて取得）
+  // 最初からの月次（制限なし）
+
+  // 直近30日分（monthly 行は Phase 3.5 で削除済みなので単純フェッチ）
   const rows = await fetchAllPages<{
     sale_date: string;
     brand: string;
@@ -71,24 +89,48 @@ export async function getDashboardData() {
       .lte('sale_date', today)
   );
 
-  // 当月・前月の集計は monthly unit を含めて（過去分を考慮）
+  // 当月・前月の集計（monthly 行は Phase 3.5 で削除済み）
   const monthRows = await fetchAllPages<{
     sale_date: string;
+    platform: string;
     revenue_jpy: number | null;
-    aggregation_unit: string;
   }>(supabase, 'sales_unified_daily', (q) =>
     q
-      .select('sale_date, revenue_jpy, aggregation_unit')
+      .select('sale_date, platform, revenue_jpy')
       .gte('sale_date', lastMonthStart)
       .lte('sale_date', today)
   );
+
+  // 月次推移（全期間）：DB側の monthly_platform_summary VIEW を使う（高速）
+  const { data: monthlySummary } = await supabase
+    .from('monthly_platform_summary')
+    .select('year_month, platform, revenue')
+    .order('year_month', { ascending: true });
+  const monthlyByPlatform = new Map<string, { dlsite: number; fanza: number; youtube: number }>();
+  for (const r of monthlySummary ?? []) {
+    const entry = monthlyByPlatform.get(r.year_month) ?? { dlsite: 0, fanza: 0, youtube: 0 };
+    const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
+    if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
+      entry[p] += Number(r.revenue ?? 0);
+    }
+    monthlyByPlatform.set(r.year_month, entry);
+  }
+  const monthlySeries = Array.from(monthlyByPlatform.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-24)
+    .map(([date, e]) => ({ date, dlsite: e.dlsite, fanza: e.fanza, youtube: e.youtube }));
 
   // KPI
   let todayJpy = 0;
   let last30dJpy = 0;
   let thisMonthJpy = 0;
   let lastMonthJpy = 0;
-  let prevMonthSameDayJpy = 0;
+  let prevMonthUntilSameDayJpy = 0;
+
+  // 前月の月初〜前月同日（今日と同じ日付ラベル）までの累計
+  const lastMonthSameDay = fmtDate(
+    new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
+  );
 
   for (const r of rows ?? []) {
     const v = r.revenue_jpy ?? 0;
@@ -100,11 +142,10 @@ export async function getDashboardData() {
     const v = r.revenue_jpy ?? 0;
     if (r.sale_date >= monthStart) thisMonthJpy += v;
     if (r.sale_date >= lastMonthStart && r.sale_date <= lastMonthEnd) lastMonthJpy += v;
-    // 前月同日（同じ日付ラベル）
-    const lastMonthSameDay = fmtDate(
-      new Date(now.getFullYear(), now.getMonth() - 1, now.getDate())
-    );
-    if (r.sale_date === lastMonthSameDay) prevMonthSameDayJpy += v;
+    // 前月同日までの累計（月初〜前月同日）
+    if (r.sale_date >= lastMonthStart && r.sale_date <= lastMonthSameDay) {
+      prevMonthUntilSameDayJpy += v;
+    }
   }
 
   const kpi: KpiSummary = {
@@ -112,7 +153,7 @@ export async function getDashboardData() {
     last30dJpy,
     thisMonthJpy,
     lastMonthJpy,
-    prevMonthSameDayJpy,
+    prevMonthUntilSameDayJpy,
   };
 
   // プラットフォーム別
@@ -137,6 +178,24 @@ export async function getDashboardData() {
     }
   }
   const dailySeries = Object.values(daily).sort((a, b) => a.date.localeCompare(b.date));
+
+  // 日次×言語（集約後ラベル）
+  const dailyLang: Record<string, Record<string, number>> = {};
+  for (const r of rows ?? []) {
+    const lang = aggregatedLanguageLabel(r.language);
+    dailyLang[r.sale_date] ??= {};
+    dailyLang[r.sale_date][lang] = (dailyLang[r.sale_date][lang] ?? 0) + (r.revenue_jpy ?? 0);
+  }
+  const dailyLanguageSeries = Object.entries(dailyLang)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, langMap]) => ({
+      date,
+      日本語: langMap['日本語'] ?? 0,
+      英語: langMap['英語'] ?? 0,
+      韓国語: langMap['韓国語'] ?? 0,
+      中国語: langMap['中国語'] ?? 0,
+      不明: langMap['不明'] ?? 0,
+    }));
 
   // 作品トップ10
   const byWork: Record<string, { revenue: number; count: number }> = {};
@@ -172,6 +231,8 @@ export async function getDashboardData() {
     byBrand,
     byLanguage,
     dailySeries,
+    dailyLanguageSeries,
+    monthlySeries,
     topWorks,
     period: { from: from30, to: today },
   };

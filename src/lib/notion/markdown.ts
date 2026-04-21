@@ -1,4 +1,5 @@
 import type { MonthlyReportData } from '@/lib/queries/monthly-report';
+import { languageLabel } from '@/lib/utils/language-label';
 
 function fmt(n: number): string {
   return `¥${n.toLocaleString()}`;
@@ -25,8 +26,8 @@ export function renderMonthlyMarkdown(data: MonthlyReportData): string {
   lines.push(`- **前年同月比**: ${pct(summary.yearOverYearPct)}（前年 ${fmt(summary.prevYearSameMonthJpy)}）`);
   lines.push('');
 
-  lines.push(`## ブランド別`);
-  lines.push('| ブランド | 売上 | 販売数 |');
+  lines.push(`## レーベル別`);
+  lines.push('| レーベル | 売上 | 販売数 |');
   lines.push('|---|---:|---:|');
   for (const r of byBrand) lines.push(`| ${r.brand} | ${fmt(r.revenue)} | ${r.salesCount.toLocaleString()} |`);
   lines.push('');
@@ -40,11 +41,11 @@ export function renderMonthlyMarkdown(data: MonthlyReportData): string {
   lines.push(`## 言語別`);
   lines.push('| 言語 | 売上 | 販売数 |');
   lines.push('|---|---:|---:|');
-  for (const r of byLanguage) lines.push(`| ${r.language} | ${fmt(r.revenue)} | ${r.salesCount.toLocaleString()} |`);
+  for (const r of byLanguage) lines.push(`| ${languageLabel(r.language)} | ${fmt(r.revenue)} | ${r.salesCount.toLocaleString()} |`);
   lines.push('');
 
   lines.push(`## 作品トップ10（当月売上順）`);
-  lines.push('| # | 作品 | ブランド | 売上 | 販売数 |');
+  lines.push('| # | 作品 | レーベル | 売上 | 販売数 |');
   lines.push('|---:|---|---|---:|---:|');
   topWorks.forEach((w, i) => {
     lines.push(`| ${i + 1} | ${w.slug ?? w.title} | ${w.brand} | ${fmt(w.revenue)} | ${w.salesCount.toLocaleString()} |`);
@@ -74,7 +75,7 @@ export function renderMonthlyCsv(data: MonthlyReportData): string {
   }
   lines.push('');
   lines.push(',,,,,');
-  lines.push('--- ブランド別 ---');
+  lines.push('--- レーベル別 ---');
   lines.push('brand,revenue,sales_count');
   for (const r of data.byBrand) lines.push(`${r.brand},${r.revenue},${r.salesCount}`);
   lines.push('');
@@ -84,7 +85,7 @@ export function renderMonthlyCsv(data: MonthlyReportData): string {
   lines.push('');
   lines.push('--- 言語別 ---');
   lines.push('language,revenue,sales_count');
-  for (const r of data.byLanguage) lines.push(`${r.language},${r.revenue},${r.salesCount}`);
+  for (const r of data.byLanguage) lines.push(`${languageLabel(r.language)},${r.revenue},${r.salesCount}`);
   lines.push('');
   lines.push('--- トップ10作品 ---');
   lines.push('rank,work_id,title,brand,revenue,sales_count');

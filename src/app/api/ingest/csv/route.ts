@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { parseCsv } from '@/lib/csv-parser';
 import { ingestCsvRows } from '@/lib/ingestion/csv-ingest';
 import { Platform } from '@/lib/types';
+import { requireAuth } from '@/lib/auth/require';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -25,6 +26,8 @@ const PeriodSchema = z
  *   - period: JSON '{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}'（DLsite必須、Fanzaはオプション）
  */
 export async function POST(request: NextRequest) {
+  const unauth = await requireAuth(request);
+  if (unauth) return unauth;
   try {
     const formData = await request.formData();
     const files = formData.getAll('files') as File[];

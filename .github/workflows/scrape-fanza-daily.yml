@@ -39,3 +39,11 @@ jobs:
             test-results/
             playwright-report/
           retention-days: 14
+
+      - name: Revalidate Vercel cache
+        if: success()
+        run: |
+          curl -s -X POST https://bisque-sales-analytics.vercel.app/api/cron/revalidate \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{"tags":["sales-data"]}' || true

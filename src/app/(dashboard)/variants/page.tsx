@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service';
 import { VariantEditor } from './VariantEditor';
+import { LANGUAGE_OPTIONS } from '@/lib/utils/language-label';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -36,8 +37,8 @@ export default async function VariantsPage({ searchParams }: { searchParams: Sea
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
       <div className="mb-4">
-        <h1 className="text-2xl font-bold text-gray-800">SKU管理</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-xl md:text-2xl font-bold text-gray-800">SKU管理</h1>
+        <p className="text-xs md:text-sm text-gray-500">
           プラットフォーム別SKUの言語・作品紐付けを管理（{variants?.length ?? 0}件表示）
         </p>
       </div>
@@ -57,12 +58,9 @@ export default async function VariantsPage({ searchParams }: { searchParams: Sea
           <label className="block text-xs text-gray-500 mb-1">言語</label>
           <select name="language" defaultValue={params.language ?? 'all'} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm">
             <option value="all">すべて</option>
-            <option value="ja">ja</option>
-            <option value="en">en</option>
-            <option value="zh-Hant">zh-Hant</option>
-            <option value="zh-Hans">zh-Hans</option>
-            <option value="ko">ko</option>
-            <option value="unknown">unknown</option>
+            {LANGUAGE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
           </select>
         </div>
         <div className="flex-1 min-w-48">
@@ -74,8 +72,8 @@ export default async function VariantsPage({ searchParams }: { searchParams: Sea
         </button>
       </form>
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-lg shadow overflow-x-auto">
+        <table className="w-full text-sm min-w-[800px]">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr className="text-xs text-gray-600">
               <th className="text-left px-3 py-2">プラットフォーム</th>

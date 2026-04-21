@@ -1,8 +1,12 @@
+import { unstable_cache } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
 import { fetchAllPages } from './paginate';
+import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
 
 export interface MonthlyReportData {
   month: string; // YYYY-MM
+  /** 現在月（今日が属する月）を表示しているか */
+  isCurrentMonth: boolean;
   summary: {
     totalJpy: number;
     prevMonthTotalJpy: number;
@@ -10,10 +14,33 @@ export interface MonthlyReportData {
     monthOverMonthPct: number | null;
     yearOverYearPct: number | null;
     salesCount: number;
+    /** 現在月表示のとき：前月の月初〜前月同日までの累計 */
+    prevMonthUntilSameDayJpy: number;
+    /** 現在月表示のとき：前年同月の月初〜前年同月同日までの累計 */
+    prevYearUntilSameDayJpy: number;
+    monthOverMonthSameDayPct: number | null;
+    yearOverYearSameDayPct: number | null;
   };
   byBrand: Array<{ brand: string; revenue: number; salesCount: number }>;
   byPlatform: Array<{ platform: string; revenue: number; salesCount: number }>;
   byLanguage: Array<{ language: string; revenue: number; salesCount: number }>;
+  /** この月に日次粒度のデータが存在するか（false なら daily テーブルは月合計を1日目にだけ載せる） */
+  hasDailyData: boolean;
+  /** 日次×レーベル */
+  dailyBrand: Array<{
+    date: string;
+    CAPURI: number;
+    BerryFeel: number;
+    BLsand: number;
+  }>;
+  /** 日次×言語（集約後：日本語/英語/韓国語/中国語） */
+  dailyLanguage: Array<{
+    date: string;
+    日本語: number;
+    英語: number;
+    韓国語: number;
+    中国語: number;
+  }>;
   dailyTable: Array<{
     date: string;
     dlsite: number;
@@ -56,36 +83,37 @@ function pct(a: number, b: number): number | null {
 
 /**
  * 指定月のレポートデータを取得
+ * unstable_cache で 10分キャッシュ＋取込完了時に 'sales-data' タグで破棄
+ * 月単位でキャッシュキー分離（過去月は実質無限キャッシュヒット）
  */
-export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
+export const getMonthlyReport = unstable_cache(
+  _getMonthlyReportImpl,
+  ['monthly-report', 'v1'],
+  { revalidate: 600, tags: ['sales-data'] }
+);
+
+async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   const supabase = createServiceClient();
   const monthStart = `${ym}-01`;
   const monthEnd = lastDayOfMonth(ym);
 
-  // 当月データ（日次 + 月次両方を含む sales_unified_daily）
-  const monthRows = await fetchAllPages<{
-    sale_date: string;
-    brand: string;
-    platform: string;
-    language: string;
-    work_id: string;
-    revenue_jpy: number | null;
-    sales_count: number | null;
-    aggregation_unit: string;
-  }>(
-    supabase,
-    'sales_unified_daily',
-    (q) =>
-      q
-        .select('sale_date, brand, platform, language, work_id, revenue_jpy, sales_count, aggregation_unit')
-        .gte('sale_date', monthStart)
-        .lte('sale_date', monthEnd)
-  );
+  // 現在月判定
+  const now = new Date();
+  const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const isCurrentMonth = ym === currentYm;
+  const todayDay = now.getDate();
 
-  // 前月・前年同月の総額
+  // 前月・前年同月
   const [prevM, prevY] = [prevMonth(ym), prevYearSame(ym)];
   const prevMStart = `${prevM}-01`, prevMEnd = lastDayOfMonth(prevM);
   const prevYStart = `${prevY}-01`, prevYEnd = lastDayOfMonth(prevY);
+  // 前月同日・前年同月同日（現在月表示のときのみ使う）
+  const prevMUntilSameDay = isCurrentMonth
+    ? `${prevM}-${String(Math.min(todayDay, Number(prevMEnd.slice(8)))).padStart(2, '0')}`
+    : prevMEnd;
+  const prevYUntilSameDay = isCurrentMonth
+    ? `${prevY}-${String(Math.min(todayDay, Number(prevYEnd.slice(8)))).padStart(2, '0')}`
+    : prevYEnd;
 
   const sumRange = async (from: string, to: string): Promise<number> => {
     const rows = await fetchAllPages<{ revenue_jpy: number | null }>(
@@ -96,9 +124,29 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
     return rows.reduce((a, r) => a + (r.revenue_jpy ?? 0), 0);
   };
 
-  const [prevMonthTotal, prevYearTotal] = await Promise.all([
+  // 当月データ（詳細）・前月合計・前年同月合計・前月同日まで・前年同月同日まで を並列取得
+  const [monthRows, prevMonthTotal, prevYearTotal, prevMonthUntilSameDay, prevYearUntilSameDay] = await Promise.all([
+    fetchAllPages<{
+      sale_date: string;
+      brand: string;
+      platform: string;
+      language: string;
+      work_id: string;
+      revenue_jpy: number | null;
+      sales_count: number | null;
+    }>(
+      supabase,
+      'sales_unified_daily',
+      (q) =>
+        q
+          .select('sale_date, brand, platform, language, work_id, revenue_jpy, sales_count')
+          .gte('sale_date', monthStart)
+          .lte('sale_date', monthEnd)
+    ),
     sumRange(prevMStart, prevMEnd),
     sumRange(prevYStart, prevYEnd),
+    sumRange(prevMStart, prevMUntilSameDay),
+    sumRange(prevYStart, prevYUntilSameDay),
   ]);
 
   let totalJpy = 0;
@@ -107,6 +155,8 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
   const byPlatform: Record<string, { revenue: number; salesCount: number }> = {};
   const byLanguage: Record<string, { revenue: number; salesCount: number }> = {};
   const daily: Record<string, { dlsite: number; fanza: number; youtube: number }> = {};
+  const dailyLangMap: Record<string, Record<string, number>> = {};
+  const dailyBrandMap: Record<string, Record<string, number>> = {};
   const byWork: Record<string, { revenue: number; salesCount: number }> = {};
 
   for (const r of monthRows ?? []) {
@@ -127,21 +177,30 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
     byLanguage[r.language].revenue += v;
     byLanguage[r.language].salesCount += c;
 
-    if (r.aggregation_unit === 'daily') {
-      daily[r.sale_date] ??= { dlsite: 0, fanza: 0, youtube: 0 };
-      const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
-      if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
-        daily[r.sale_date][p] += v;
-      }
+    // daily は実日付に、monthly は月初日の sale_date に載せる（日次内訳がない月も総額が見えるように）
+    daily[r.sale_date] ??= { dlsite: 0, fanza: 0, youtube: 0 };
+    const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
+    if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
+      daily[r.sale_date][p] += v;
     }
+    const lang = aggregatedLanguageLabel(r.language);
+    dailyLangMap[r.sale_date] ??= {};
+    dailyLangMap[r.sale_date][lang] = (dailyLangMap[r.sale_date][lang] ?? 0) + v;
+
+    dailyBrandMap[r.sale_date] ??= {};
+    dailyBrandMap[r.sale_date][r.brand] = (dailyBrandMap[r.sale_date][r.brand] ?? 0) + v;
 
     byWork[r.work_id] ??= { revenue: 0, salesCount: 0 };
     byWork[r.work_id].revenue += v;
     byWork[r.work_id].salesCount += c;
   }
 
+  const hasDailyData = monthRows.length > 0;
+
   // 日次テーブル整形（月初〜月末を埋める）
   const dailyTable: MonthlyReportData['dailyTable'] = [];
+  const dailyLanguage: MonthlyReportData['dailyLanguage'] = [];
+  const dailyBrand: MonthlyReportData['dailyBrand'] = [];
   const [yy, mm] = ym.split('-').map(Number);
   const daysInMonth = new Date(yy, mm, 0).getDate();
   let prevTotal = 0;
@@ -158,6 +217,22 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
       prevDayPct: d === 1 ? null : pct(total, prevTotal),
     });
     prevTotal = total;
+    const langRow = dailyLangMap[dateStr] ?? {};
+    dailyLanguage.push({
+      date: dateStr,
+      日本語: langRow['日本語'] ?? 0,
+      英語: langRow['英語'] ?? 0,
+      韓国語: langRow['韓国語'] ?? 0,
+      中国語: langRow['中国語'] ?? 0,
+    });
+
+    const brandRow = dailyBrandMap[dateStr] ?? {};
+    dailyBrand.push({
+      date: dateStr,
+      CAPURI: brandRow['CAPURI'] ?? 0,
+      BerryFeel: brandRow['BerryFeel'] ?? 0,
+      BLsand: brandRow['BLsand'] ?? 0,
+    });
   }
 
   // トップ10作品
@@ -184,6 +259,7 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
 
   return {
     month: ym,
+    isCurrentMonth,
     summary: {
       totalJpy,
       prevMonthTotalJpy: prevMonthTotal,
@@ -191,6 +267,10 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
       monthOverMonthPct: pct(totalJpy, prevMonthTotal),
       yearOverYearPct: pct(totalJpy, prevYearTotal),
       salesCount,
+      prevMonthUntilSameDayJpy: prevMonthUntilSameDay,
+      prevYearUntilSameDayJpy: prevYearUntilSameDay,
+      monthOverMonthSameDayPct: pct(totalJpy, prevMonthUntilSameDay),
+      yearOverYearSameDayPct: pct(totalJpy, prevYearUntilSameDay),
     },
     byBrand: Object.entries(byBrand)
       .map(([brand, v]) => ({ brand, ...v }))
@@ -201,6 +281,9 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
     byLanguage: Object.entries(byLanguage)
       .map(([language, v]) => ({ language, ...v }))
       .sort((a, b) => b.revenue - a.revenue),
+    hasDailyData,
+    dailyBrand,
+    dailyLanguage,
     dailyTable,
     topWorks,
   };
@@ -208,21 +291,43 @@ export async function getMonthlyReport(ym: string): Promise<MonthlyReportData> {
 
 /**
  * 利用可能な月リスト（sales_unified_daily に存在する年月を抽出）
- * Supabase の 1000行制限を超えるのでページング
+ * 10分キャッシュ＋取込完了時破棄
  */
-export async function getAvailableMonths(): Promise<string[]> {
+export const getAvailableMonths = unstable_cache(
+  _getAvailableMonthsImpl,
+  ['available-months', 'v1'],
+  { revalidate: 600, tags: ['sales-data'] }
+);
+
+async function _getAvailableMonthsImpl(): Promise<string[]> {
   const supabase = createServiceClient();
-  const set = new Set<string>();
-  const pageSize = 1000;
-  for (let offset = 0; ; offset += pageSize) {
-    const { data, error } = await supabase
-      .from('sales_unified_daily')
-      .select('sale_date')
-      .order('sale_date', { ascending: false })
-      .range(offset, offset + pageSize - 1);
-    if (error || !data || data.length === 0) break;
-    for (const r of data) set.add(String(r.sale_date).slice(0, 7));
-    if (data.length < pageSize) break;
+  // 最早・最遅だけを最小クエリで取得し、その間の月を列挙する
+  const [earliestSales, latestSales, earliestYt, latestYt] = await Promise.all([
+    supabase.from('sales_daily').select('sale_date').order('sale_date', { ascending: true }).limit(1).maybeSingle(),
+    supabase.from('sales_daily').select('sale_date').order('sale_date', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('youtube_metrics_daily').select('metric_date').order('metric_date', { ascending: true }).limit(1).maybeSingle(),
+    supabase.from('youtube_metrics_daily').select('metric_date').order('metric_date', { ascending: false }).limit(1).maybeSingle(),
+  ]);
+
+  const dates: string[] = [
+    earliestSales.data?.sale_date,
+    latestSales.data?.sale_date,
+    earliestYt.data?.metric_date,
+    latestYt.data?.metric_date,
+  ].filter(Boolean) as string[];
+  if (dates.length === 0) return [];
+  const sorted = dates.map((d) => String(d)).sort();
+  const firstYm = sorted[0].slice(0, 7);
+  const lastYm = sorted[sorted.length - 1].slice(0, 7);
+
+  const months: string[] = [];
+  const [fy, fm] = firstYm.split('-').map(Number);
+  const [ly, lm] = lastYm.split('-').map(Number);
+  let y = fy, m = fm;
+  while (y < ly || (y === ly && m <= lm)) {
+    months.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) { m = 1; y += 1; }
   }
-  return Array.from(set).sort((a, b) => b.localeCompare(a));
+  return months.sort((a, b) => b.localeCompare(a)); // 新しい月を先頭
 }

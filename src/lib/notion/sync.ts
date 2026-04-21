@@ -1,6 +1,7 @@
 import { Client } from '@notionhq/client';
 import { createServiceClient } from '@/lib/supabase/service';
 import { getMonthlyReport, type MonthlyReportData } from '@/lib/queries/monthly-report';
+import { languageLabel } from '@/lib/utils/language-label';
 
 function fmt(n: number): string {
   return `¥${n.toLocaleString()}`;
@@ -117,7 +118,7 @@ function buildTopWorksTable(data: MonthlyReportData): BlockCreate {
     fmt(w.revenue),
     w.salesCount.toLocaleString(),
   ]);
-  return buildTableBlock(['#', '作品', 'ブランド', '売上', '販売数'], rows);
+  return buildTableBlock(['#', '作品', 'レーベル', '売上', '販売数'], rows);
 }
 
 /**
@@ -178,12 +179,12 @@ async function createNewPage(
   // ブロックを追加
   const summaryBlock = buildSummaryCallout(data);
   const brandBlock = buildBreakdownCallout(
-    'ブランド別',
+    'レーベル別',
     data.byBrand.map((r) => ({ label: r.brand, revenue: r.revenue, salesCount: r.salesCount }))
   );
   const langBlock = buildBreakdownCallout(
     '言語別',
-    data.byLanguage.map((r) => ({ label: r.language, revenue: r.revenue, salesCount: r.salesCount }))
+    data.byLanguage.map((r) => ({ label: languageLabel(r.language), revenue: r.revenue, salesCount: r.salesCount }))
   );
   const dailyTable = buildDailyTable(data);
   const topWorksTable = buildTopWorksTable(data);
@@ -191,7 +192,7 @@ async function createNewPage(
   const children: BlockCreate[] = [
     heading(1, `${month} 月次サマリ`),
     summaryBlock,
-    heading(2, 'ブランド別'),
+    heading(2, 'レーベル別'),
     brandBlock,
     heading(2, '言語別'),
     langBlock,
@@ -264,7 +265,7 @@ async function updateExistingPage(
       notion,
       row.brand_summary_block_id,
       buildBreakdownCallout(
-        'ブランド別',
+        'レーベル別',
         data.byBrand.map((r) => ({ label: r.brand, revenue: r.revenue, salesCount: r.salesCount }))
       )
     );
@@ -275,7 +276,7 @@ async function updateExistingPage(
       row.language_summary_block_id,
       buildBreakdownCallout(
         '言語別',
-        data.byLanguage.map((r) => ({ label: r.language, revenue: r.revenue, salesCount: r.salesCount }))
+        data.byLanguage.map((r) => ({ label: languageLabel(r.language), revenue: r.revenue, salesCount: r.salesCount }))
       )
     );
   }
@@ -283,7 +284,7 @@ async function updateExistingPage(
   // テーブル系は行を全削除→挿入
   if (row.top_works_table_block_id) {
     await replaceTableRows(notion, row.top_works_table_block_id, [
-      ['#', '作品', 'ブランド', '売上', '販売数'],
+      ['#', '作品', 'レーベル', '売上', '販売数'],
       ...data.topWorks.map((w, i) => [
         String(i + 1),
         w.slug ?? w.title.slice(0, 40),

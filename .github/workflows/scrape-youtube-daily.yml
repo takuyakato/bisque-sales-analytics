@@ -1,0 +1,68 @@
+name: scrape-youtube-daily
+
+on:
+  schedule:
+    # UTC 20:30 = JST 05:30 に前日分を取得（DLsite 05:00 / Fanza 05:15 の後）
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+    inputs:
+      from:
+        description: '開始日 YYYY-MM-DD（空なら昨日）'
+        required: false
+      to:
+        description: '終了日 YYYY-MM-DD（空なら今日）'
+        required: false
+      channels:
+        description: 'jp / en / all'
+        required: false
+        default: 'all'
+
+concurrency:
+  group: youtube-daily
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run YouTube scraper
+        run: |
+          set -e
+          TARGET="${{ github.event.inputs.channels }}"
+          TARGET="${TARGET:-all}"
+          FROM="${{ github.event.inputs.from }}"
+          TO="${{ github.event.inputs.to }}"
+          if [ -z "$FROM" ] || [ -z "$TO" ]; then
+            # デフォルト: 昨日〜今日
+            npx tsx scripts/youtube-scrape.ts "$TARGET" --days=1
+          else
+            npx tsx scripts/youtube-scrape.ts "$TARGET" --from="$FROM" --to="$TO"
+          fi
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN_JP: ${{ secrets.YOUTUBE_REFRESH_TOKEN_JP }}
+          YOUTUBE_REFRESH_TOKEN_EN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_EN }}
+          YOUTUBE_CHANNEL_ID_JP: ${{ secrets.YOUTUBE_CHANNEL_ID_JP }}
+          YOUTUBE_CHANNEL_ID_EN: ${{ secrets.YOUTUBE_CHANNEL_ID_EN }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          USD_JPY_RATE: ${{ vars.USD_JPY_RATE || '150' }}
+
+      - name: Revalidate Vercel cache
+        if: success()
+        run: |
+          curl -s -X POST https://bisque-sales-analytics.vercel.app/api/cron/revalidate \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{"tags":["sales-data"]}' || true

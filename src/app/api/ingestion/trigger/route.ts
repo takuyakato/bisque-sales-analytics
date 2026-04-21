@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { requireAuth } from '@/lib/auth/require';
 
 export const runtime = 'nodejs';
 
@@ -21,6 +22,8 @@ const BodySchema = z.object({
  * 要環境変数: GITHUB_REPO=owner/repo, GITHUB_TOKEN=PAT（workflow:write権限）
  */
 export async function POST(request: NextRequest) {
+  const unauth = await requireAuth(request);
+  if (unauth) return unauth;
   try {
     const body = await request.json();
     const parsed = BodySchema.safeParse(body);

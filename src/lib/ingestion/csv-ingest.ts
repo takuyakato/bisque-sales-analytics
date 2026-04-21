@@ -132,10 +132,9 @@ export async function ingestCsvRows(options: IngestCsvOptions): Promise<IngestRe
         .eq('sales_price_jpy', row.sales_price_jpy)
         .maybeSingle();
 
+      // work_id / platform は product_variants から JOIN で取得するため sales_daily には保存しない（Phase 2 denormalization 排除）
       const salePayload = {
         variant_id: variantId,
-        work_id: workId,
-        platform: row.platform,
         sale_date: row.sale_date,
         aggregation_unit: row.aggregation_unit,
         sales_price_jpy: row.sales_price_jpy,
@@ -146,6 +145,7 @@ export async function ingestCsvRows(options: IngestCsvOptions): Promise<IngestRe
         raw_data: row.raw,
         ingestion_log_id,
       };
+      void workId; // 旧denormalize用、現在は未使用（works テーブルは variants 経由で参照）
 
       if (existingSale) {
         const { error: upErr } = await supabase

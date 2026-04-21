@@ -1,11 +1,27 @@
 import Link from 'next/link';
 import { getDashboardData } from '@/lib/queries/dashboard';
-import { DailyTrendChart } from '@/components/charts/DailyTrendChart';
-import { LanguagePieChart } from '@/components/charts/LanguagePieChart';
-import { BarCompareChart } from '@/components/charts/BarCompareChart';
+import { StackedBarChart } from '@/components/charts/StackedBarChart';
+import { HorizontalBarChart } from '@/components/charts/HorizontalBarChart';
+import { aggregateByLanguage } from '@/lib/utils/language-label';
 
+const PLATFORM_STACKS = [
+  { dataKey: 'dlsite', label: 'DLsite', color: '#2563eb' },
+  { dataKey: 'fanza', label: 'Fanza', color: '#dc2626' },
+  { dataKey: 'youtube', label: 'YouTube', color: '#ef4444' },
+];
+const LANGUAGE_STACKS = [
+  { dataKey: '日本語', label: '日本語', color: '#2563eb' },
+  { dataKey: '英語', label: '英語', color: '#f59e0b' },
+  { dataKey: '中国語', label: '中国語', color: '#10b981' },
+  { dataKey: '韓国語', label: '韓国語', color: '#ec4899' },
+];
+const BRAND_COLORS = { CAPURI: '#2563eb', BerryFeel: '#ec4899', BLsand: '#10b981' };
+const PLATFORM_COLORS = { DLsite: '#2563eb', Fanza: '#dc2626', YouTube: '#ef4444' };
+const LANGUAGE_COLORS = { 日本語: '#2563eb', 英語: '#f59e0b', 中国語: '#10b981', 韓国語: '#ec4899' };
+
+// データは unstable_cache でキャッシュ（10分）＋取込完了時にタグ破棄
+// 静的ビルド時のDB全件取得で失敗するため、ページ自体は動的レンダリングに戻す
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
 
 function fmt(n: number): string {
   return `¥${n.toLocaleString()}`;
@@ -24,14 +40,14 @@ export default async function Dashboard() {
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">ダッシュボード</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-xl md:text-2xl font-bold text-gray-800">ダッシュボード</h1>
+        <p className="text-xs md:text-sm text-gray-500">
           直近30日（{data.period.from} 〜 {data.period.to}）の速報
         </p>
       </div>
 
       {/* KPIカード */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
         <KpiCard label="今日" value={fmt(data.kpi.todayJpy)} />
         <KpiCard label="直近30日" value={fmt(data.kpi.last30dJpy)} />
         <KpiCard
@@ -40,36 +56,48 @@ export default async function Dashboard() {
           sub={`前月: ${fmt(data.kpi.lastMonthJpy)} (${pct(data.kpi.thisMonthJpy, data.kpi.lastMonthJpy)})`}
         />
         <KpiCard
-          label="前月同日比"
-          value={pct(data.kpi.todayJpy, data.kpi.prevMonthSameDayJpy)}
-          sub={`今日 ${fmt(data.kpi.todayJpy)} / 前月同日 ${fmt(data.kpi.prevMonthSameDayJpy)}`}
+          label="前月同日まで比"
+          value={pct(data.kpi.thisMonthJpy, data.kpi.prevMonthUntilSameDayJpy)}
+          sub={`今月累計 ${fmt(data.kpi.thisMonthJpy)} / 前月同日まで ${fmt(data.kpi.prevMonthUntilSameDayJpy)}`}
         />
       </div>
 
       {/* 日次推移 */}
       <div className="bg-white rounded-lg shadow p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">直近30日の売上推移（プラットフォーム別）</h2>
-        <DailyTrendChart data={data.dailySeries} />
+<StackedBarChart data={data.dailySeries} xKey="date" stacks={PLATFORM_STACKS} />
       </div>
 
-      {/* 3カラム: 言語別・ブランド別・プラットフォーム別 */}
+      <div className="bg-white rounded-lg shadow p-5 mb-6">
+        <h2 className="text-sm font-semibold text-gray-700 mb-3">直近30日の売上推移（言語別）</h2>
+<StackedBarChart data={data.dailyLanguageSeries} xKey="date" stacks={LANGUAGE_STACKS} />
+      </div>
+
+      {/* 月次推移（過去24か月・プラットフォーム積み上げ） */}
+      <div className="bg-white rounded-lg shadow p-5 mb-6">
+        <h2 className="text-sm font-semibold text-gray-700 mb-3">月次推移（過去24か月・プラットフォーム別）</h2>
+        <StackedBarChart data={data.monthlySeries} xKey="date" stacks={PLATFORM_STACKS} />
+      </div>
+
+      {/* 3カラム: 言語別・レーベル別・プラットフォーム別（直近30日の構成） */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-lg shadow p-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">言語別</h2>
-          <LanguagePieChart data={data.byLanguage} />
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">言語別（直近30日）</h2>
+          <HorizontalBarChart data={aggregateByLanguage(data.byLanguage)} colors={LANGUAGE_COLORS} />
         </div>
         <div className="bg-white rounded-lg shadow p-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">ブランド別</h2>
-          <BarCompareChart
-            data={data.byBrand}
-            colors={{ CAPURI: '#2563eb', BerryFeel: '#ec4899', BLsand: '#10b981', unknown: '#9ca3af' }}
-          />
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">レーベル別（直近30日）</h2>
+          <HorizontalBarChart data={data.byBrand} colors={BRAND_COLORS} />
         </div>
         <div className="bg-white rounded-lg shadow p-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">プラットフォーム別</h2>
-          <BarCompareChart
-            data={data.byPlatform}
-            colors={{ dlsite: '#2563eb', fanza: '#dc2626', youtube: '#ef4444' }}
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">プラットフォーム別（直近30日）</h2>
+          <HorizontalBarChart
+            data={{
+              DLsite: data.byPlatform.dlsite ?? 0,
+              Fanza: data.byPlatform.fanza ?? 0,
+              YouTube: data.byPlatform.youtube ?? 0,
+            }}
+            colors={PLATFORM_COLORS}
           />
         </div>
       </div>
@@ -82,7 +110,7 @@ export default async function Dashboard() {
             <tr className="border-b border-gray-200 text-xs text-gray-500">
               <th className="text-left py-2">#</th>
               <th className="text-left py-2">作品</th>
-              <th className="text-left py-2">ブランド</th>
+              <th className="text-left py-2">レーベル</th>
               <th className="text-right py-2">販売数</th>
               <th className="text-right py-2">売上</th>
             </tr>

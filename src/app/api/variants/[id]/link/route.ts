@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createServiceClient } from '@/lib/supabase/service';
+import { requireAuth } from '@/lib/auth/require';
 
 export const runtime = 'nodejs';
 
@@ -17,6 +18,8 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  const unauth = await requireAuth(request);
+  if (unauth) return unauth;
   const { id } = await context.params;
   try {
     const body = await request.json();
@@ -74,10 +77,7 @@ export async function POST(
       .eq('id', id);
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
 
-    // 関連する sales_daily の work_id も更新（冗長格納カラム）
-    if (newWorkId) {
-      await supabase.from('sales_daily').update({ work_id: newWorkId }).eq('variant_id', id);
-    }
+    // sales_daily の work_id は Phase 2 で DROP 済み、ここでの更新は不要
 
     // 旧 work が arphan（他に variant が紐付いておらず、かつ auto_created）なら削除
     const oldWorkId = currentVariant.work_id;

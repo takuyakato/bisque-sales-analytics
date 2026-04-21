@@ -80,7 +80,7 @@ export function WorkEditor({ work }: { work: Work }) {
             <dd className="font-mono">{work.slug ?? '—'}</dd>
           </div>
           <div>
-            <dt className="text-xs text-gray-500">ブランド</dt>
+            <dt className="text-xs text-gray-500">レーベル</dt>
             <dd>{work.brand}</dd>
           </div>
           <div>
@@ -130,7 +130,7 @@ export function WorkEditor({ work }: { work: Work }) {
             className="w-full px-3 py-1.5 border border-gray-300 rounded-md font-mono"
           />
         </Field>
-        <Field label="ブランド">
+        <Field label="レーベル">
           <select
             value={form.brand}
             onChange={(e) => setForm({ ...form, brand: e.target.value })}

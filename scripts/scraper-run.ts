@@ -105,6 +105,94 @@ function getScraperClass(platform: Platform): ScraperConstructor {
   }
 }
 
+/**
+ * daily バックフィル：ブラウザを1回だけ起動して、日付ループで fetchSalesCsv を連続実行
+ * 進捗を1日ごとに表示。失敗した日はスキップして続行（ログに status=failed で記録）。
+ */
+async function runDailyBackfillReusingBrowser(
+  platform: Platform,
+  dates: string[],
+  version: string
+): Promise<void> {
+  const ScraperClass = getScraperClass(platform);
+  const scraper = new ScraperClass();
+  const runnerLabel = process.env.GITHUB_ACTIONS ? 'github-actions' : 'manual';
+
+  console.log(`総日数: ${dates.length} / 予想所要時間: 約${Math.round(dates.length * 18 / 60)} 分`);
+  const started = Date.now();
+  let successCount = 0;
+  let failedCount = 0;
+  let totalInserted = 0;
+
+  try {
+    await scraper.launch();
+    await scraper.ensureLoggedIn();
+    console.log(`[${new Date().toISOString()}] ログイン成功。日次ループ開始\n`);
+
+    for (let i = 0; i < dates.length; i++) {
+      const iso = dates[i];
+      const logger = new ScraperLogger(platform, runnerLabel, version);
+      const counts = { inserted: 0, updated: 0, skipped: 0 };
+      let status: 'success' | 'partial' | 'failed' = 'success';
+      let errorMessage: string | undefined;
+
+      try {
+        await logger.start(iso, iso);
+        logger.step('fetch-csv', { date: iso });
+        const csvBuffer = await scraper.fetchSalesCsv(iso, iso);
+
+        const parsed = parseCsv({
+          buffer: csvBuffer,
+          filename: `${platform}_${iso}.csv`,
+          platform,
+          periodOverride: { from: iso, to: iso },
+        });
+        logger.step('parse-done', { rows: parsed.rows.length, skipped: parsed.skipped });
+
+        const ingestResult = await ingestCsvRows({
+          platform,
+          rows: parsed.rows,
+          periodFrom: iso,
+          periodTo: iso,
+          source: 'scrape',
+          runner: runnerLabel,
+        });
+        counts.inserted += ingestResult.inserted;
+        counts.updated += ingestResult.updated;
+        counts.skipped += ingestResult.skipped;
+        if (ingestResult.status !== 'success') status = ingestResult.status;
+        if (ingestResult.error_message) errorMessage = ingestResult.error_message;
+        totalInserted += ingestResult.inserted;
+      } catch (e) {
+        status = 'failed';
+        const kind = e instanceof ScraperError ? e.kind : 'unknown';
+        errorMessage = e instanceof Error ? `[${kind}] ${e.message}` : String(e);
+        failedCount++;
+      } finally {
+        await logger.finish(status, counts, errorMessage);
+        if (status === 'success') successCount++;
+      }
+
+      const elapsed = (Date.now() - started) / 1000;
+      const perDay = elapsed / (i + 1);
+      const remain = Math.round((dates.length - i - 1) * perDay);
+      const pct = Math.round(((i + 1) / dates.length) * 100);
+      console.log(
+        `[${pct}% ${i + 1}/${dates.length}] ${iso}: ${status} (+${counts.inserted}行) / ` +
+        `経過${Math.round(elapsed / 60)}分 / 残り予想${Math.round(remain / 60)}分`
+      );
+
+      // DLsite/Fanzaに優しく（1秒間隔）
+      await new Promise((res) => setTimeout(res, 1000));
+    }
+  } finally {
+    await scraper.close();
+    const totalMin = Math.round((Date.now() - started) / 60000);
+    console.log(`\n=== daily backfill 完了 ===`);
+    console.log(`成功: ${successCount}/${dates.length} / 失敗: ${failedCount} / 追加行: ${totalInserted} / 所要: ${totalMin}分`);
+  }
+}
+
 async function runScrapeOnce(platform: Platform, from: string, to: string, version: string) {
   const ScraperClass = getScraperClass(platform);
   const scraper = new ScraperClass();
@@ -208,17 +296,28 @@ async function main() {
         await new Promise((res) => setTimeout(res, 1500));
       }
     } else {
+      // daily バックフィル：1回の launch/login でブラウザを使い回す
       const [fy, fm] = args.from.split('-').map(Number);
       const [ty, tm] = args.to.split('-').map(Number);
       const startDate = new Date(fy, fm - 1, 1);
       const endDate = new Date(ty, tm, 0);
+      // JSTの昨日までを対象にする（今日以降は DLsite/Fanza が月次累計を返す可能性があるため除外）
+      const nowJst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+      const yesterdayJst = new Date(nowJst);
+      yesterdayJst.setDate(yesterdayJst.getDate() - 1);
+      const yStr = `${yesterdayJst.getUTCFullYear()}-${String(yesterdayJst.getUTCMonth() + 1).padStart(2, '0')}-${String(yesterdayJst.getUTCDate()).padStart(2, '0')}`;
+
+      const dates: string[] = [];
       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-        const iso = d.toISOString().slice(0, 10);
-        console.log(`\n→ ${iso}`);
-        const r = await runScrapeOnce(args.platform, iso, iso, version);
-        console.log('  結果:', r.status, r.counts);
-        await new Promise((res) => setTimeout(res, 1500));
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const da = String(d.getDate()).padStart(2, '0');
+        const iso = `${y}-${m}-${da}`;
+        if (iso > yStr) break; // JST 昨日より後はスキップ
+        dates.push(iso);
       }
+      console.log(`対象範囲: ${dates[0]} 〜 ${dates[dates.length - 1]}（JST昨日 ${yStr} まで）`);
+      await runDailyBackfillReusingBrowser(args.platform, dates, version);
     }
   }
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { languageLabel } from '@/lib/utils/language-label';
 
 type Platform = 'dlsite' | 'fanza';
 type Mode = 'preview' | 'commit';
@@ -222,7 +223,7 @@ export default function UploadPage() {
                       <th className="border p-2 text-left">商品ID</th>
                       <th className="border p-2 text-left">タイトル</th>
                       <th className="border p-2">言語</th>
-                      <th className="border p-2">ブランド</th>
+                      <th className="border p-2">レーベル</th>
                       <th className="border p-2">販売数</th>
                       <th className="border p-2">売上(¥)</th>
                     </tr>
@@ -236,7 +237,7 @@ export default function UploadPage() {
                             ? s.product_title.slice(0, 40) + '…'
                             : s.product_title}
                         </td>
-                        <td className="border p-2 text-center">{s.language}</td>
+                        <td className="border p-2 text-center">{languageLabel(s.language)}</td>
                         <td className="border p-2 text-center">{s.brand}</td>
                         <td className="border p-2 text-right">{s.sales_count}</td>
                         <td className="border p-2 text-right">{s.net_revenue_jpy.toLocaleString()}</td>

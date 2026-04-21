@@ -2,12 +2,18 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { languageLabel } from '@/lib/utils/language-label';
 
 interface Props {
   variantId: string;
   field: 'language' | 'origin_status' | 'work_link';
   value: string;
   options: string[];
+}
+
+function displayFor(field: 'language' | 'origin_status' | 'work_link', code: string): string {
+  if (field === 'language') return languageLabel(code);
+  return code;
 }
 
 export function VariantEditor({ variantId, field, value, options }: Props) {
@@ -44,7 +50,7 @@ export function VariantEditor({ variantId, field, value, options }: Props) {
         onClick={() => setEditing(true)}
         className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
       >
-        {current}
+        {displayFor(field, current)}
       </button>
     );
   }
@@ -60,7 +66,7 @@ export function VariantEditor({ variantId, field, value, options }: Props) {
     >
       {options.map((o) => (
         <option key={o} value={o}>
-          {o}
+          {displayFor(field, o)}
         </option>
       ))}
     </select>
