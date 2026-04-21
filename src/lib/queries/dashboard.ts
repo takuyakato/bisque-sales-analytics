@@ -9,12 +9,13 @@ import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
  */
 
 export interface KpiSummary {
-  todayJpy: number;
   last30dJpy: number;
   thisMonthJpy: number;
   lastMonthJpy: number;
   /** 前月の月初〜前月同日までの累計 */
   prevMonthUntilSameDayJpy: number;
+  /** 今月着地見込み：今月累計＋（最新データがある3日の平均 × 月末までの残日数） */
+  expectedMonthEndJpy: number;
 }
 
 export interface GroupedTotal {
@@ -54,7 +55,7 @@ export async function getDashboardData() {
 
 const _getDashboardDataCached = unstable_cache(
   async (_todayKey: string) => _getDashboardDataImpl(),
-  ['dashboard-data', 'v2'],
+  ['dashboard-data', 'v3'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
@@ -121,7 +122,6 @@ async function _getDashboardDataImpl() {
     .map(([date, e]) => ({ date, dlsite: e.dlsite, fanza: e.fanza, youtube: e.youtube }));
 
   // KPI
-  let todayJpy = 0;
   let last30dJpy = 0;
   let thisMonthJpy = 0;
   let lastMonthJpy = 0;
@@ -133,27 +133,43 @@ async function _getDashboardDataImpl() {
   );
 
   for (const r of rows ?? []) {
-    const v = r.revenue_jpy ?? 0;
-    if (r.sale_date === today) todayJpy += v;
-    last30dJpy += v;
+    last30dJpy += r.revenue_jpy ?? 0;
   }
 
+  // 日付ごとの売上（着地見込み計算のため）
+  const dailyRevenue: Record<string, number> = {};
   for (const r of monthRows ?? []) {
     const v = r.revenue_jpy ?? 0;
+    dailyRevenue[r.sale_date] = (dailyRevenue[r.sale_date] ?? 0) + v;
     if (r.sale_date >= monthStart) thisMonthJpy += v;
     if (r.sale_date >= lastMonthStart && r.sale_date <= lastMonthEnd) lastMonthJpy += v;
-    // 前月同日までの累計（月初〜前月同日）
     if (r.sale_date >= lastMonthStart && r.sale_date <= lastMonthSameDay) {
       prevMonthUntilSameDayJpy += v;
     }
   }
 
+  // 今月着地見込み：データが取れている直近3日の平均 × 月末までの残日数 を今月累計に加算
+  const datesWithData = Object.keys(dailyRevenue).sort();
+  const last3Dates = datesWithData.slice(-3);
+  const past3DaysAvg = last3Dates.length
+    ? last3Dates.reduce((a, d) => a + (dailyRevenue[d] ?? 0), 0) / last3Dates.length
+    : 0;
+  const lastDataDate = datesWithData.length ? datesWithData[datesWithData.length - 1] : null;
+  // 最新データが今月内なら「月末 - 最終データ日」、今月データがまだなければ月日数分まるごと予測
+  const daysInThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  let daysRemaining = daysInThisMonth;
+  if (lastDataDate && lastDataDate >= monthStart) {
+    const lastDataDay = Number(lastDataDate.slice(8, 10));
+    daysRemaining = daysInThisMonth - lastDataDay;
+  }
+  const expectedMonthEndJpy = Math.round(thisMonthJpy + past3DaysAvg * daysRemaining);
+
   const kpi: KpiSummary = {
-    todayJpy,
     last30dJpy,
     thisMonthJpy,
     lastMonthJpy,
     prevMonthUntilSameDayJpy,
+    expectedMonthEndJpy,
   };
 
   // プラットフォーム別
