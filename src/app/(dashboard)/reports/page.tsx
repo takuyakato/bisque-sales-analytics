@@ -66,8 +66,8 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
         <MonthSelector current={month} months={months} />
       </div>
 
-      {/* 月次サマリカード（現在月なら同日まで比較、過去月なら月合計比較） */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 mb-6">
+      {/* 月次サマリカード（現在月なら同日まで比較＋着地見込み、過去月なら月合計比較） */}
+      <div className={`grid grid-cols-1 ${data.isCurrentMonth ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-3 md:gap-4 mb-6`}>
         <KpiCard label="月次合計" value={fmt(data.summary.totalJpy)} sub={`${data.summary.salesCount.toLocaleString()} 件`} />
         {data.isCurrentMonth ? (
           <>
@@ -80,6 +80,11 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
               label="前年同月同日まで比"
               value={pctLabel(data.summary.yearOverYearSameDayPct)}
               sub={`前年同月同日まで ${fmt(data.summary.prevYearUntilSameDayJpy)}`}
+            />
+            <KpiCard
+              label="今月着地見込み"
+              value={data.summary.expectedMonthEndJpy !== null ? fmt(data.summary.expectedMonthEndJpy) : '—'}
+              sub={`前月: ${fmt(data.summary.prevMonthTotalJpy)} (${pctLabel(data.summary.expectedVsPrevMonthPct)})`}
             />
           </>
         ) : (

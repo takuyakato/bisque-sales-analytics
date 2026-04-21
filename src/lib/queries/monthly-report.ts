@@ -20,6 +20,10 @@ export interface MonthlyReportData {
     prevYearUntilSameDayJpy: number;
     monthOverMonthSameDayPct: number | null;
     yearOverYearSameDayPct: number | null;
+    /** 現在月表示のとき：今月着地見込み（実績＋残日数×直近3日平均）。非現在月は null */
+    expectedMonthEndJpy: number | null;
+    /** 現在月表示のとき：着地見込みと前月総額の比較 % */
+    expectedVsPrevMonthPct: number | null;
   };
   byBrand: Array<{ brand: string; revenue: number; salesCount: number }>;
   byPlatform: Array<{ platform: string; revenue: number; salesCount: number }>;
@@ -88,7 +92,7 @@ function pct(a: number, b: number): number | null {
  */
 export const getMonthlyReport = unstable_cache(
   _getMonthlyReportImpl,
-  ['monthly-report', 'v1'],
+  ['monthly-report', 'v2'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
@@ -125,7 +129,15 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   };
 
   // 当月データ（詳細）・前月合計・前年同月合計・前月同日まで・前年同月同日まで を並列取得
-  const [monthRows, prevMonthTotal, prevYearTotal, prevMonthUntilSameDay, prevYearUntilSameDay] = await Promise.all([
+  // 現在月表示時は着地見込み算出用に前月末の10日間も追加取得（月初の精度対策）
+  const forecastLookbackStart = (() => {
+    if (!isCurrentMonth) return null;
+    const [y, m] = ym.split('-').map(Number);
+    const d = new Date(y, m - 1, 1 - 10);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+
+  const [monthRows, prevMonthTotal, prevYearTotal, prevMonthUntilSameDay, prevYearUntilSameDay, forecastLookbackRows] = await Promise.all([
     fetchAllPages<{
       sale_date: string;
       brand: string;
@@ -147,6 +159,13 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     sumRange(prevYStart, prevYEnd),
     sumRange(prevMStart, prevMUntilSameDay),
     sumRange(prevYStart, prevYUntilSameDay),
+    forecastLookbackStart
+      ? fetchAllPages<{ sale_date: string; revenue_jpy: number | null }>(
+          supabase,
+          'sales_unified_daily',
+          (q) => q.select('sale_date, revenue_jpy').gte('sale_date', forecastLookbackStart).lt('sale_date', monthStart)
+        )
+      : Promise.resolve([] as { sale_date: string; revenue_jpy: number | null }[]),
   ]);
 
   let totalJpy = 0;
@@ -235,6 +254,31 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     });
   }
 
+  // 今月着地見込み：現在月のみ、取れている直近3日の平均 × 月末までの残日数
+  let expectedMonthEndJpy: number | null = null;
+  let expectedVsPrevMonthPct: number | null = null;
+  if (isCurrentMonth) {
+    const forecastDaily: Record<string, number> = {};
+    for (const r of monthRows) {
+      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + (r.revenue_jpy ?? 0);
+    }
+    for (const r of forecastLookbackRows) {
+      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + (r.revenue_jpy ?? 0);
+    }
+    const datesWithData = Object.keys(forecastDaily).sort();
+    const last3 = datesWithData.slice(-3);
+    const past3DaysAvg = last3.length
+      ? last3.reduce((a, d) => a + forecastDaily[d], 0) / last3.length
+      : 0;
+    const lastDataDate = datesWithData.length ? datesWithData[datesWithData.length - 1] : null;
+    let daysRemaining = daysInMonth;
+    if (lastDataDate && lastDataDate >= monthStart) {
+      daysRemaining = daysInMonth - Number(lastDataDate.slice(8, 10));
+    }
+    expectedMonthEndJpy = Math.round(totalJpy + past3DaysAvg * daysRemaining);
+    expectedVsPrevMonthPct = pct(expectedMonthEndJpy, prevMonthTotal);
+  }
+
   // トップ10作品
   const topWorkIds = Object.entries(byWork)
     .sort((a, b) => b[1].revenue - a[1].revenue)
@@ -271,6 +315,8 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
       prevYearUntilSameDayJpy: prevYearUntilSameDay,
       monthOverMonthSameDayPct: pct(totalJpy, prevMonthUntilSameDay),
       yearOverYearSameDayPct: pct(totalJpy, prevYearUntilSameDay),
+      expectedMonthEndJpy,
+      expectedVsPrevMonthPct,
     },
     byBrand: Object.entries(byBrand)
       .map(([brand, v]) => ({ brand, ...v }))
