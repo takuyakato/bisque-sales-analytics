@@ -10,6 +10,8 @@ import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
 
 export interface KpiSummary {
   last30dJpy: number;
+  /** 直近30日のさらに1つ前の30日（60日前〜31日前） */
+  prev30dJpy: number;
   thisMonthJpy: number;
   lastMonthJpy: number;
   /** 前月の月初〜前月同日までの累計 */
@@ -55,7 +57,7 @@ export async function getDashboardData() {
 
 const _getDashboardDataCached = unstable_cache(
   async (_todayKey: string) => _getDashboardDataImpl(),
-  ['dashboard-data', 'v4'],
+  ['dashboard-data', 'v5'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
@@ -67,6 +69,10 @@ async function _getDashboardDataImpl() {
   const d30 = new Date(now);
   d30.setDate(d30.getDate() - 30);
   const from30 = fmtDate(d30);
+
+  const d60 = new Date(now);
+  d60.setDate(d60.getDate() - 60);
+  const from60 = fmtDate(d60);
 
   const monthStart = fmtDate(new Date(now.getFullYear(), now.getMonth(), 1));
   const lastMonthStart = fmtDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
@@ -89,6 +95,14 @@ async function _getDashboardDataImpl() {
       .gte('sale_date', from30)
       .lte('sale_date', today)
   );
+
+  // さらに1つ前の30日（前30日）の合計
+  const prev30Rows = await fetchAllPages<{ revenue_jpy: number | null }>(
+    supabase,
+    'sales_unified_daily',
+    (q) => q.select('revenue_jpy').gte('sale_date', from60).lt('sale_date', from30)
+  );
+  const prev30dJpy = (prev30Rows ?? []).reduce((a, r) => a + (r.revenue_jpy ?? 0), 0);
 
   // 当月・前月の集計（monthly 行は Phase 3.5 で削除済み）
   const monthRows = await fetchAllPages<{
@@ -185,6 +199,7 @@ async function _getDashboardDataImpl() {
 
   const kpi: KpiSummary = {
     last30dJpy,
+    prev30dJpy,
     thisMonthJpy,
     lastMonthJpy,
     prevMonthUntilSameDayJpy,

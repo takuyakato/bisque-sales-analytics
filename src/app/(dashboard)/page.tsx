@@ -52,7 +52,11 @@ export default async function Dashboard() {
 
       {/* KPIカード */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 mb-6">
-        <KpiCard label="直近30日" value={fmt(data.kpi.last30dJpy)} />
+        <KpiCard
+          label="直近30日"
+          value={fmt(data.kpi.last30dJpy)}
+          sub={`前30日: ${fmt(data.kpi.prev30dJpy)} (${pct(data.kpi.last30dJpy, data.kpi.prev30dJpy)})`}
+        />
         <KpiCard
           label="今月累計"
           value={fmt(data.kpi.thisMonthJpy)}
