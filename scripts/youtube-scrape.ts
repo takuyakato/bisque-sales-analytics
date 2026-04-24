@@ -7,10 +7,13 @@
  *   npx tsx scripts/youtube-scrape.ts jp --days=7                    # 直近7日
  *   npx tsx scripts/youtube-scrape.ts all --days=7                   # jp + en 両方
  */
-import { readFileSync } from 'fs';
-for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
-  const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-  if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+import { readFileSync, existsSync } from 'fs';
+// ローカル実行時のみ .env.local を読む。GitHub Actions 等では Secrets が既に注入されている
+if (existsSync('.env.local')) {
+  for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+  }
 }
 import { YoutubeScraper, type YoutubeChannelLabel } from '../src/lib/scrapers/youtube';
 import { ingestYoutubeMetrics } from '../src/lib/ingestion/youtube-ingest';
