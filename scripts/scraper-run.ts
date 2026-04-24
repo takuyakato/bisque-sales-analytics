@@ -297,10 +297,20 @@ async function main() {
       }
     } else {
       // daily バックフィル：1回の launch/login でブラウザを使い回す
-      const [fy, fm] = args.from.split('-').map(Number);
-      const [ty, tm] = args.to.split('-').map(Number);
-      const startDate = new Date(fy, fm - 1, 1);
-      const endDate = new Date(ty, tm, 0);
+      // --from / --to は YYYY-MM（月単位）または YYYY-MM-DD（特定日範囲）
+      const parseDateish = (s: string, isStart: boolean): Date => {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+          const [y, m, d] = s.split('-').map(Number);
+          return new Date(y, m - 1, d);
+        }
+        if (/^\d{4}-\d{2}$/.test(s)) {
+          const [y, m] = s.split('-').map(Number);
+          return isStart ? new Date(y, m - 1, 1) : new Date(y, m, 0);
+        }
+        throw new Error(`invalid --${isStart ? 'from' : 'to'} format: ${s}（YYYY-MM または YYYY-MM-DD）`);
+      };
+      const startDate = parseDateish(args.from, true);
+      const endDate = parseDateish(args.to, false);
       // JSTの昨日までを対象にする（今日以降は DLsite/Fanza が月次累計を返す可能性があるため除外）
       const nowJst = new Date(Date.now() + 9 * 60 * 60 * 1000);
       const yesterdayJst = new Date(nowJst);
