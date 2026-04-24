@@ -54,15 +54,21 @@ export class DlsiteScraper extends BaseScraper {
     }
 
     // 保護ページにアクセス → viviON ID にリダイレクト
+    // networkidle まで待つことで SPA 初期化完了を保証
     await this.page.goto(DLSITE_SELECTORS.login.protectedPageUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 20000,
+      waitUntil: 'networkidle',
+      timeout: 45000,
     });
-    await this.page.waitForTimeout(2000);
+    await this.page.waitForTimeout(3000);
 
-    // ログインフォーム待機
+    // ログインフォーム待機（30秒までレンダリングを待つ）
     const idLocator = this.page.locator(DLSITE_SELECTORS.login.usernameInput);
-    if (!(await idLocator.first().isVisible({ timeout: 10000 }).catch(() => false))) {
+    if (!(await idLocator.first().isVisible({ timeout: 30000 }).catch(() => false))) {
+      // 真因切り分け用：失敗時に現在URLと HTMLの先頭1500文字を stderr 出力
+      const currentUrl = this.page.url();
+      const htmlSnippet = await this.page.content().catch(() => '<content read failed>');
+      console.error(`[dlsite] login page not rendered. url=${currentUrl}`);
+      console.error(`[dlsite] html(head 1500): ${htmlSnippet.slice(0, 1500)}`);
       throw new SelectorNotFoundError(DLSITE_SELECTORS.login.usernameInput, 'login.usernameInput');
     }
 

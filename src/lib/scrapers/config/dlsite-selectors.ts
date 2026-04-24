@@ -15,7 +15,7 @@
  */
 
 export const DLSITE_SELECTORS = {
-  version: '2026-04-20b',
+  version: '2026-04-25',
 
   login: {
     // 保護ページへアクセスすると viviON ID ログインにリダイレクト
