@@ -31,9 +31,21 @@ export abstract class BaseScraper {
 
   /**
    * Playwright起動＋セッション復元
+   * bot検出回避のための stealth 対策も同時に適用：
+   *   - --disable-blink-features=AutomationControlled（webdriver flag を消す起動引数）
+   *   - 通常の Chrome 相当の User-Agent を明示（chromium-headless-shell の UA を回避）
+   *   - Asia/Tokyo タイムゾーン・日本語ロケール・Accept-Language 指定
+   *   - navigator.webdriver を undefined に偽装（initScript）
    */
   async launch(): Promise<void> {
-    this.browser = await chromium.launch({ headless: this.headless });
+    this.browser = await chromium.launch({
+      headless: this.headless,
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+      ],
+    });
     const storageState = (await loadSession(this.platform)) as Parameters<
       Browser['newContext']
     >[0] extends infer T
@@ -47,8 +59,25 @@ export abstract class BaseScraper {
       ...(storageState ? { storageState: storageState as never } : {}),
       viewport: { width: 1280, height: 800 },
       locale: 'ja-JP',
+      timezoneId: 'Asia/Tokyo',
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      extraHTTPHeaders: {
+        'Accept-Language': 'ja-JP,ja;q=0.9,en;q=0.8',
+      },
     });
     this.context.setDefaultTimeout(30_000);
+
+    // navigator.webdriver を消し、window.chrome を生やす（bot検出の簡易回避）
+    await this.context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      // window.chrome が無いと bot と判定するサイト対策
+      const w = window as unknown as { chrome?: unknown };
+      if (!w.chrome) {
+        w.chrome = { runtime: {} };
+      }
+    });
+
     this.page = await this.context.newPage();
 
     if (this.debug) {
