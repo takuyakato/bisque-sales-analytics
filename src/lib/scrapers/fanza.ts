@@ -192,26 +192,28 @@ export class FanzaScraper extends BaseScraper {
 
 /**
  * 年齢ゲート通過ヘルパー
+ * 複数セレクタ候補（href属性／日本語／英語UI）を順に試す。
+ * rurl 値は DMM の暗号化トークンでURLとして使えないため、フォールバックでは使わない。
  */
 async function passAgeGate(page: Page): Promise<void> {
   const url = page.url();
   if (!FANZA_SELECTORS.ageGate.urlPattern.test(url)) return;
 
-  const yesLink = page.locator(FANZA_SELECTORS.ageGate.yesLink).first();
-  if (await yesLink.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await Promise.all([
-      page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => null),
-      yesLink.click(),
-    ]);
-    return;
+  for (const sel of FANZA_SELECTORS.ageGate.yesLink) {
+    const el = page.locator(sel).first();
+    if (await el.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await Promise.all([
+        page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => null),
+        el.click(),
+      ]);
+      return;
+    }
   }
 
-  // フォールバック：rurl パラメータから戻り先を取得
-  const m = url.match(/rurl=([^&]+)/);
-  if (m) {
-    const returnUrl = decodeURIComponent(m[1]);
-    await page.goto(returnUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  }
+  throw new SelectorNotFoundError(
+    FANZA_SELECTORS.ageGate.yesLink.join(','),
+    'ageGate.yesLink'
+  );
 }
 
 async function findFirstVisible(page: Page, selectors: readonly string[] | string): Promise<string | null> {

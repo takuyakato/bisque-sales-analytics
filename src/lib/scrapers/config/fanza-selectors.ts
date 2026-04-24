@@ -13,7 +13,7 @@
  */
 
 export const FANZA_SELECTORS = {
-  version: '2026-04-21',
+  version: '2026-04-25',
 
   login: {
     // ログインURL は accounts.dmm.co.jp 系。ただし保護ページアクセス時に自動リダイレクト
@@ -35,7 +35,13 @@ export const FANZA_SELECTORS = {
   ageGate: {
     // 年齢認証ページのマーカー
     urlPattern: /age_check/,
-    yesLink: 'a:has-text("はい")',
+    // 「はい」リンクの候補（言語非依存の href パターンを優先、次に日本語・英語UI）
+    // US IPから接続すると FANZA が英語UI（I Agree / Reject）を返すケースがあるため複数対応
+    yesLink: [
+      'a[href*="declared=yes"]',
+      'a:has-text("はい")',
+      'a:has-text("I Agree")',
+    ] as readonly string[],
   },
 
   salesPage: {
