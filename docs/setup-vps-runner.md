@@ -24,71 +24,71 @@
 2. 契約完了後、コントロールパネルで **IPv4 アドレス** を控える
 3. VPS が起動していることを確認
 
-### 2. ローカル Mac から SSH 接続（ユーザー、5分）
+### 2. SSH鍵の生成（ローカル Mac、3分）
+
+`~/.ssh/` に SSH鍵がまだ無いので、先に生成：
+
+```
+ssh-keygen -t ed25519 -C "takuyakato@roadie.co.jp" -f ~/.ssh/id_ed25519 -N ""
+```
+
+鍵の内容を表示（ConoHa のコントロールパネルで登録用にコピー）：
+
+```
+cat ~/.ssh/id_ed25519.pub
+```
+
+**`ssh-ed25519 AAAA...` の行全体をコピーし、ConoHa の「SSH Key」登録欄に貼り付ける**。
+もし VPS 作成時に SSH Key 登録を忘れた場合は、後から root パスワードでログインして `~/.ssh/authorized_keys` に追記でもOK。
+
+### 3. ローカル Mac から SSH 接続（ユーザー、5分）
 
 ```
 ssh root@<VPSのIPアドレス>
 ```
 
-初回はフィンガープリント確認で `yes` を入力、root パスワードを入力。
+初回はフィンガープリント確認で `yes` を入力、SSH鍵 or root パスワードで認証。
 
-### 3. VPS 初期セットアップ（VPS上で実行、約10分）
+### 4. VPS 初期セットアップ（VPS上で1コマンド、約10分）
 
-SSH 接続した VPS 上で、以下を1行ずつコピペで実行：
+リポジトリの `docs/vps-bootstrap.sh` をVPSに転送して実行するのが最速。
 
-```
-apt update && apt upgrade -y
-```
+**方法A: ローカルMacから scp で転送**（別ターミナルで実行）：
 
 ```
-apt install -y curl git build-essential ca-certificates
+scp /Users/takuyakato/projects/bisque-sales-analytics/docs/vps-bootstrap.sh root@<VPSのIP>:/tmp/
 ```
 
-```
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-```
+**方法B: VPS上で vi や nano で直接貼り付け**（scp面倒な場合）：
 
 ```
-apt install -y nodejs
+nano /tmp/vps-bootstrap.sh
 ```
+`docs/vps-bootstrap.sh` の中身をまるごと貼り付け → `Ctrl+O`→Enter→`Ctrl+X`。
+
+**実行**（VPSのrootで）：
 
 ```
-timedatectl set-timezone Asia/Tokyo
+sudo bash /tmp/vps-bootstrap.sh
 ```
 
-```
-ufw default deny incoming && ufw default allow outgoing && ufw allow ssh && echo y | ufw enable
-```
+このスクリプトが冪等的に以下を実行：
+- apt upgrade
+- Node.js 22 LTS インストール
+- Playwright chromium 依存パッケージ導入
+- タイムゾーン Asia/Tokyo 設定
+- firewall (ufw) で ssh のみ許可
+- runner ユーザー作成（NOPASSWD sudo 付き）
 
-確認（node と npm が入ったか）：
+完了すると次にやるべきコマンドが表示される。
 
-```
-node --version && npm --version
-```
-
-`v22.x.x` と `10.x.x` が出ればOK。
-
-### 4. 作業用ユーザー作成 & sudo設定（VPS上、5分）
-
-root で運用するのは危険なので、runner専用ユーザーを作る：
-
-```
-adduser --disabled-password --gecos "" runner && usermod -aG sudo runner && echo "runner ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/runner
-```
+### 5. runner ユーザーに切替（VPS上、1分）
 
 ```
 su - runner
 ```
 
 プロンプトが `runner@...` になればOK。
-
-### 5. Playwright chromium の依存パッケージ導入（VPS上、5分）
-
-runner ユーザーで：
-
-```
-sudo apt install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdbus-1-3 libdrm2 libxkbcommon0 libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 fonts-noto-cjk
-```
 
 ### 6. GitHub Actions self-hosted runner 登録（VPS上、10分）
 
@@ -156,10 +156,27 @@ gh workflow run scrape-dlsite-daily.yml
 ## リスク対策
 
 ### ConoHa IPが弾かれた場合
-→ ConoHaを1時間使用で解約（¥110程度）、以下の代替検討：
-- さくらVPS 東京（別IPレンジ）
-- Vultr Tokyo、Linode Tokyo
-- Residential Proxy（BrightData 月$50〜）
+
+→ ConoHa を1時間使用で解約（¥110程度、時間課金の恩恵）、以下の代替を順に試す：
+
+1. **さくらVPS 東京**（推奨）
+   - 月¥685〜、**2週間無料お試し**あり（決済不要で試せる）
+   - https://vps.sakura.ad.jp/
+   - IPレンジがConoHaと別なので、IPブロック回避可能性あり
+
+2. **Vultr Tokyo**
+   - 月$3.5〜、時間課金（$0.005/h）
+   - https://www.vultr.com/
+   - プリペイド（$10 最小チャージ）
+
+3. **Linode (Akamai) Tokyo**
+   - 月$5〜、時間課金
+   - https://www.linode.com/
+
+4. **Residential Proxy（最終手段）**
+   - BrightData、SmartProxy 等
+   - 月$50〜（データ量で変動）
+   - 住宅ISPのIPを使うのでbot検出率最低
 
 ### VPS 停止のリスク
 - ConoHa の SLA は月99.99%
