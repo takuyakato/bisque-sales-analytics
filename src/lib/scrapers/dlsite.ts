@@ -54,11 +54,16 @@ export class DlsiteScraper extends BaseScraper {
     }
 
     // 保護ページにアクセス → viviON ID にリダイレクト
-    // networkidle まで待つことで SPA 初期化完了を保証
-    await this.page.goto(DLSITE_SELECTORS.login.protectedPageUrl, {
-      waitUntil: 'networkidle',
-      timeout: 45000,
-    });
+    // SPA なので networkidle は永久に到達しない。load 完了 or timeout でも続行し、
+    // 後段の isVisible で input 出現を待つ
+    await this.page
+      .goto(DLSITE_SELECTORS.login.protectedPageUrl, {
+        waitUntil: 'load',
+        timeout: 30000,
+      })
+      .catch(() => {
+        // load イベント未発火でも継続
+      });
     await this.page.waitForTimeout(3000);
 
     // ログインフォーム待機（30秒までレンダリングを待つ）
