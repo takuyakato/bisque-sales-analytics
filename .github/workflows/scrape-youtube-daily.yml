@@ -43,8 +43,11 @@ jobs:
           FROM="${{ github.event.inputs.from }}"
           TO="${{ github.event.inputs.to }}"
           if [ -z "$FROM" ] || [ -z "$TO" ]; then
-            # デフォルト: 昨日〜今日
-            npx tsx scripts/youtube-scrape.ts "$TARGET" --days=1
+            # デフォルト: 直近7日を再UPSERT
+            # YouTube Analytics は確定までに2-3日かかるため、
+            # --days=1 だと直近の未確定日が永遠に取れないので 7日に拡大
+            # UPSERT なので既存日は安全に上書き、quota 内（jp+en×1 query/日）
+            npx tsx scripts/youtube-scrape.ts "$TARGET" --days=7
           else
             npx tsx scripts/youtube-scrape.ts "$TARGET" --from="$FROM" --to="$TO"
           fi
