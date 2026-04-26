@@ -24,7 +24,9 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # --days=7 だと jp+en で約30分かかる場合がある（UPSERT がシリアル）
+    # timeout 60 に拡大して en が cancel されないように
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
