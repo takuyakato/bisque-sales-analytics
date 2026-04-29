@@ -136,6 +136,7 @@ async function runOne(label: YoutubeChannelLabel, from: string, to: string, chun
       await runOne(label, from, to, chunkDays);
     } catch (e) {
       console.error(`${label} 失敗:`, e instanceof Error ? e.message : e);
+      process.exitCode = 1;
     }
   }
 })();

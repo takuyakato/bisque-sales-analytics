@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { ReactNode, useState } from 'react';
 import {
   BarChart,
   Bar,
@@ -25,6 +25,7 @@ interface Props {
   xKey: string;
   stacks: StackDef[];
   height?: number;
+  legendBefore?: ReactNode;
 }
 
 /**
@@ -33,7 +34,7 @@ interface Props {
  *  - マウスオーバー時のツールチップに内訳＋合計を表示
  *  - Legend クリックで系列の表示/非表示切替、Y軸も自動調整
  */
-export function StackedBarChart({ data, xKey, stacks, height = 300 }: Props) {
+export function StackedBarChart({ data, xKey, stacks, height = 300, legendBefore }: Props) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   const toggleStack = (key: string) => {
@@ -83,30 +84,48 @@ export function StackedBarChart({ data, xKey, stacks, height = 300 }: Props) {
         />
         <Legend
           wrapperStyle={{ fontSize: 12, cursor: 'pointer', paddingTop: 8 }}
-          onClick={(e) => {
-            const key = (e as { dataKey?: string }).dataKey;
-            if (key) toggleStack(key);
-          }}
-          formatter={(value, entry) => {
-            const key = (entry as { dataKey?: string }).dataKey;
-            const isHidden = key && hidden.has(key);
+          content={(props) => {
+            const payload =
+              (props.payload as Array<{
+                dataKey?: string;
+                value?: string;
+                color?: string;
+              }>) ?? [];
+            const sortedPayload = payload.slice().sort((a, b) => {
+              if (a.dataKey === 'forecast') return 1;
+              if (b.dataKey === 'forecast') return -1;
+              return 0;
+            });
             return (
-              <span
-                style={{
-                  display: 'inline-block',
-                  padding: '2px 8px',
-                  marginLeft: 4,
-                  border: `1px solid ${isHidden ? '#e5e7eb' : '#d1d5db'}`,
-                  borderRadius: 12,
-                  backgroundColor: isHidden ? '#f9fafb' : '#fff',
-                  color: isHidden ? '#9ca3af' : '#374151',
-                  textDecoration: isHidden ? 'line-through' : 'none',
-                  fontWeight: 500,
-                  transition: 'all 0.15s',
-                }}
-              >
-                {value}
-              </span>
+              <div className="flex flex-col items-center gap-1">
+                {legendBefore}
+                <div className="flex flex-wrap justify-center gap-1">
+                  {sortedPayload.map((entry) => {
+                    const key = entry.dataKey;
+                    const isHidden = key && hidden.has(key);
+                    return (
+                      <button
+                        key={key ?? entry.value}
+                        type="button"
+                        onClick={() => key && toggleStack(key)}
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded-full border transition"
+                        style={{
+                          borderColor: isHidden ? '#e5e7eb' : '#d1d5db',
+                          backgroundColor: isHidden ? '#f9fafb' : '#fff',
+                          color: isHidden ? '#9ca3af' : '#374151',
+                          textDecoration: isHidden ? 'line-through' : 'none',
+                        }}
+                      >
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ backgroundColor: entry.color }}
+                        />
+                        {entry.value}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             );
           }}
         />

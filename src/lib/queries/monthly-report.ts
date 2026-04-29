@@ -45,6 +45,15 @@ export interface MonthlyReportData {
     韓国語: number;
     中国語: number;
   }>;
+  /** 日次×レーベル×言語（レーベルフィルタ付き言語別グラフ用） */
+  dailyBrandLanguage: Array<{
+    date: string;
+    brand: string;
+    日本語: number;
+    英語: number;
+    韓国語: number;
+    中国語: number;
+  }>;
   dailyTable: Array<{
     date: string;
     dlsite: number;
@@ -92,7 +101,7 @@ function pct(a: number, b: number): number | null {
  */
 export const getMonthlyReport = unstable_cache(
   _getMonthlyReportImpl,
-  ['monthly-report', 'v2'],
+  ['monthly-report', 'v3'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
@@ -176,6 +185,7 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   const daily: Record<string, { dlsite: number; fanza: number; youtube: number }> = {};
   const dailyLangMap: Record<string, Record<string, number>> = {};
   const dailyBrandMap: Record<string, Record<string, number>> = {};
+  const dailyBrandLangMap: Record<string, Record<string, Record<string, number>>> = {};
   const byWork: Record<string, { revenue: number; salesCount: number }> = {};
 
   for (const r of monthRows ?? []) {
@@ -209,6 +219,11 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     dailyBrandMap[r.sale_date] ??= {};
     dailyBrandMap[r.sale_date][r.brand] = (dailyBrandMap[r.sale_date][r.brand] ?? 0) + v;
 
+    dailyBrandLangMap[r.sale_date] ??= {};
+    dailyBrandLangMap[r.sale_date][r.brand] ??= {};
+    dailyBrandLangMap[r.sale_date][r.brand][lang] =
+      (dailyBrandLangMap[r.sale_date][r.brand][lang] ?? 0) + v;
+
     byWork[r.work_id] ??= { revenue: 0, salesCount: 0 };
     byWork[r.work_id].revenue += v;
     byWork[r.work_id].salesCount += c;
@@ -220,6 +235,7 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   const dailyTable: MonthlyReportData['dailyTable'] = [];
   const dailyLanguage: MonthlyReportData['dailyLanguage'] = [];
   const dailyBrand: MonthlyReportData['dailyBrand'] = [];
+  const dailyBrandLanguage: MonthlyReportData['dailyBrandLanguage'] = [];
   const [yy, mm] = ym.split('-').map(Number);
   const daysInMonth = new Date(yy, mm, 0).getDate();
   let prevTotal = 0;
@@ -252,6 +268,19 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
       BerryFeel: brandRow['BerryFeel'] ?? 0,
       BLsand: brandRow['BLsand'] ?? 0,
     });
+
+    const brandLangRow = dailyBrandLangMap[dateStr] ?? {};
+    for (const brand of ['CAPURI', 'BerryFeel', 'BLsand']) {
+      const langValues = brandLangRow[brand] ?? {};
+      dailyBrandLanguage.push({
+        date: dateStr,
+        brand,
+        日本語: langValues['日本語'] ?? 0,
+        英語: langValues['英語'] ?? 0,
+        韓国語: langValues['韓国語'] ?? 0,
+        中国語: langValues['中国語'] ?? 0,
+      });
+    }
   }
 
   // 今月着地見込み：現在月のみ、取れている直近3日の平均 × 月末までの残日数
@@ -330,6 +359,7 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     hasDailyData,
     dailyBrand,
     dailyLanguage,
+    dailyBrandLanguage,
     dailyTable,
     topWorks,
   };

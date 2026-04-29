@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getDashboardData } from '@/lib/queries/dashboard';
 import { StackedBarChart } from '@/components/charts/StackedBarChart';
 import { HorizontalBarChart } from '@/components/charts/HorizontalBarChart';
+import { LanguageBrandFilterChart } from '@/components/charts/LanguageBrandFilterChart';
 import { aggregateByLanguage } from '@/lib/utils/language-label';
 
 const PLATFORM_STACKS = [
@@ -12,12 +13,6 @@ const PLATFORM_STACKS = [
 const MONTHLY_STACKS = [
   ...PLATFORM_STACKS,
   { dataKey: 'forecast', label: '着地見込み（予測）', color: '#9ca3af' },
-];
-const LANGUAGE_STACKS = [
-  { dataKey: '日本語', label: '日本語', color: '#2563eb' },
-  { dataKey: '英語', label: '英語', color: '#f59e0b' },
-  { dataKey: '中国語', label: '中国語', color: '#10b981' },
-  { dataKey: '韓国語', label: '韓国語', color: '#ec4899' },
 ];
 const BRAND_COLORS = { CAPURI: '#2563eb', BerryFeel: '#ec4899', BLsand: '#10b981' };
 const PLATFORM_COLORS = { DLsite: '#2563eb', Fanza: '#dc2626', YouTube: '#ef4444' };
@@ -75,16 +70,22 @@ export default async function Dashboard() {
 <StackedBarChart data={data.dailySeries} xKey="date" stacks={PLATFORM_STACKS} />
       </div>
 
-      <div className="bg-white rounded-lg shadow p-5 mb-6">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">直近30日の売上推移（言語別）</h2>
-<StackedBarChart data={data.dailyLanguageSeries} xKey="date" stacks={LANGUAGE_STACKS} />
-      </div>
+      <LanguageBrandFilterChart
+        title="直近30日の売上推移（言語別）"
+        rows={data.dailyBrandLanguageSeries}
+      />
 
       {/* 月次推移（過去24か月・プラットフォーム積み上げ＋最新月は着地見込みを予測色で追加） */}
       <div className="bg-white rounded-lg shadow p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">月次推移（過去24か月・プラットフォーム別）</h2>
         <StackedBarChart data={data.monthlySeries} xKey="date" stacks={MONTHLY_STACKS} />
       </div>
+
+      <LanguageBrandFilterChart
+        title="月次推移（過去24か月・言語別）"
+        rows={data.monthlyBrandLanguageSeries}
+        forecastByDate={data.monthlyForecastByDate}
+      />
 
       {/* 3カラム: 言語別・レーベル別・プラットフォーム別（直近30日の構成） */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">

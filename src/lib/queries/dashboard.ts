@@ -32,6 +32,15 @@ export interface DailyPoint {
   youtube: number;
 }
 
+export interface DailyBrandLanguagePoint {
+  date: string;
+  brand: string;
+  日本語: number;
+  英語: number;
+  韓国語: number;
+  中国語: number;
+}
+
 export interface TopWork {
   work_id: string;
   brand: string;
@@ -57,7 +66,7 @@ export async function getDashboardData() {
 
 const _getDashboardDataCached = unstable_cache(
   async (_todayKey: string) => _getDashboardDataImpl(),
-  ['dashboard-data', 'v5'],
+  ['dashboard-data', 'v9'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
@@ -75,6 +84,7 @@ async function _getDashboardDataImpl() {
   const from60 = fmtDate(d60);
 
   const monthStart = fmtDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  const monthlyChartStart = fmtDate(new Date(now.getFullYear(), now.getMonth() - 23, 1));
   const lastMonthStart = fmtDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
   const lastMonthEnd = fmtDate(new Date(now.getFullYear(), now.getMonth(), 0));
 
@@ -108,10 +118,11 @@ async function _getDashboardDataImpl() {
   const monthRows = await fetchAllPages<{
     sale_date: string;
     platform: string;
+    language: string;
     revenue_jpy: number | null;
   }>(supabase, 'sales_unified_daily', (q) =>
     q
-      .select('sale_date, platform, revenue_jpy')
+      .select('sale_date, platform, language, revenue_jpy')
       .gte('sale_date', lastMonthStart)
       .lte('sale_date', today)
   );
@@ -121,6 +132,21 @@ async function _getDashboardDataImpl() {
     .from('monthly_platform_summary')
     .select('year_month, platform, revenue')
     .order('year_month', { ascending: true });
+  const { data: monthlyLanguageSummary } = await supabase
+    .from('monthly_language_summary')
+    .select('year_month, language, revenue')
+    .order('year_month', { ascending: true });
+  const monthlyBrandLanguageRows = await fetchAllPages<{
+    sale_date: string;
+    brand: string;
+    language: string;
+    revenue_jpy: number | null;
+  }>(supabase, 'sales_unified_daily', (q) =>
+    q
+      .select('sale_date, brand, language, revenue_jpy')
+      .gte('sale_date', monthlyChartStart)
+      .lte('sale_date', today)
+  );
   const monthlyByPlatform = new Map<string, { dlsite: number; fanza: number; youtube: number }>();
   for (const r of monthlySummary ?? []) {
     const entry = monthlyByPlatform.get(r.year_month) ?? { dlsite: 0, fanza: 0, youtube: 0 };
@@ -129,6 +155,34 @@ async function _getDashboardDataImpl() {
       entry[p] += Number(r.revenue ?? 0);
     }
     monthlyByPlatform.set(r.year_month, entry);
+  }
+
+  const monthlyByLanguage = new Map<
+    string,
+    { 日本語: number; 英語: number; 中国語: number; 韓国語: number }
+  >();
+  for (const r of monthlyLanguageSummary ?? []) {
+    const entry =
+      monthlyByLanguage.get(r.year_month) ??
+      { 日本語: 0, 英語: 0, 中国語: 0, 韓国語: 0 };
+    const lang = aggregatedLanguageLabel(r.language as string);
+    if (lang === '日本語' || lang === '英語' || lang === '中国語' || lang === '韓国語') {
+      entry[lang] += Number(r.revenue ?? 0);
+    }
+    monthlyByLanguage.set(r.year_month, entry);
+  }
+
+  const monthlyBrandLang = new Map<string, Record<string, Record<string, number>>>();
+  for (const r of monthlyBrandLanguageRows ?? []) {
+    const month = r.sale_date.slice(0, 7);
+    const lang = aggregatedLanguageLabel(r.language);
+    if (lang !== '日本語' && lang !== '英語' && lang !== '中国語' && lang !== '韓国語') {
+      continue;
+    }
+    const monthEntry = monthlyBrandLang.get(month) ?? {};
+    monthEntry[r.brand] ??= {};
+    monthEntry[r.brand][lang] = (monthEntry[r.brand][lang] ?? 0) + (r.revenue_jpy ?? 0);
+    monthlyBrandLang.set(month, monthEntry);
   }
 
   // KPI
@@ -149,6 +203,7 @@ async function _getDashboardDataImpl() {
   // 日付ごとの売上（着地見込み計算のため）/ 今月分プラットフォーム別（マテビュー遅延対策）
   const dailyRevenue: Record<string, number> = {};
   const currentMonthPlatform = { dlsite: 0, fanza: 0, youtube: 0 };
+  const currentMonthLanguage = { 日本語: 0, 英語: 0, 中国語: 0, 韓国語: 0 };
   for (const r of monthRows ?? []) {
     const v = r.revenue_jpy ?? 0;
     dailyRevenue[r.sale_date] = (dailyRevenue[r.sale_date] ?? 0) + v;
@@ -157,6 +212,10 @@ async function _getDashboardDataImpl() {
       const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
       if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
         currentMonthPlatform[p] += v;
+      }
+      const lang = aggregatedLanguageLabel(r.language);
+      if (lang === '日本語' || lang === '英語' || lang === '中国語' || lang === '韓国語') {
+        currentMonthLanguage[lang] += v;
       }
     }
     if (r.sale_date >= lastMonthStart && r.sale_date <= lastMonthEnd) lastMonthJpy += v;
@@ -185,6 +244,7 @@ async function _getDashboardDataImpl() {
   // 今月分はマテビューの遅延を避けるため日次データで上書き、着地見込み分を forecast フィールドに載せる
   const currentMonthKey = monthStart.slice(0, 7);
   monthlyByPlatform.set(currentMonthKey, currentMonthPlatform);
+  monthlyByLanguage.set(currentMonthKey, currentMonthLanguage);
 
   const monthlySeries = Array.from(monthlyByPlatform.entries())
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -196,6 +256,35 @@ async function _getDashboardDataImpl() {
       youtube: e.youtube,
       forecast: date === currentMonthKey ? forecastTailJpy : 0,
     }));
+
+  const monthlyLanguageSeries = Array.from(monthlyByLanguage.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-24)
+    .map(([date, e]) => ({
+      date,
+      日本語: e.日本語,
+      英語: e.英語,
+      中国語: e.中国語,
+      韓国語: e.韓国語,
+      forecast: date === currentMonthKey ? forecastTailJpy : 0,
+    }));
+
+  const monthlyBrandLanguageSeries: DailyBrandLanguagePoint[] = [];
+  const recentMonths = Array.from(monthlyByLanguage.keys()).sort().slice(-24);
+  for (const date of recentMonths) {
+    const monthEntry = monthlyBrandLang.get(date) ?? {};
+    for (const brand of ['CAPURI', 'BerryFeel', 'BLsand', 'unknown']) {
+      const langMap = monthEntry[brand] ?? {};
+      monthlyBrandLanguageSeries.push({
+        date,
+        brand,
+        日本語: langMap['日本語'] ?? 0,
+        英語: langMap['英語'] ?? 0,
+        韓国語: langMap['韓国語'] ?? 0,
+        中国語: langMap['中国語'] ?? 0,
+      });
+    }
+  }
 
   const kpi: KpiSummary = {
     last30dJpy,
@@ -231,10 +320,16 @@ async function _getDashboardDataImpl() {
 
   // 日次×言語（集約後ラベル）
   const dailyLang: Record<string, Record<string, number>> = {};
+  const dailyBrandLang: Record<string, Record<string, Record<string, number>>> = {};
   for (const r of rows ?? []) {
     const lang = aggregatedLanguageLabel(r.language);
     dailyLang[r.sale_date] ??= {};
     dailyLang[r.sale_date][lang] = (dailyLang[r.sale_date][lang] ?? 0) + (r.revenue_jpy ?? 0);
+
+    dailyBrandLang[r.sale_date] ??= {};
+    dailyBrandLang[r.sale_date][r.brand] ??= {};
+    dailyBrandLang[r.sale_date][r.brand][lang] =
+      (dailyBrandLang[r.sale_date][r.brand][lang] ?? 0) + (r.revenue_jpy ?? 0);
   }
   const dailyLanguageSeries = Object.entries(dailyLang)
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -246,6 +341,21 @@ async function _getDashboardDataImpl() {
       中国語: langMap['中国語'] ?? 0,
       不明: langMap['不明'] ?? 0,
     }));
+
+  const dailyBrandLanguageSeries: DailyBrandLanguagePoint[] = [];
+  for (const date of Object.keys(dailyBrandLang).sort()) {
+    for (const brand of ['CAPURI', 'BerryFeel', 'BLsand', 'unknown']) {
+      const langMap = dailyBrandLang[date][brand] ?? {};
+      dailyBrandLanguageSeries.push({
+        date,
+        brand,
+        日本語: langMap['日本語'] ?? 0,
+        英語: langMap['英語'] ?? 0,
+        韓国語: langMap['韓国語'] ?? 0,
+        中国語: langMap['中国語'] ?? 0,
+      });
+    }
+  }
 
   // 作品トップ10
   const byWork: Record<string, { revenue: number; count: number }> = {};
@@ -282,7 +392,11 @@ async function _getDashboardDataImpl() {
     byLanguage,
     dailySeries,
     dailyLanguageSeries,
+    dailyBrandLanguageSeries,
     monthlySeries,
+    monthlyLanguageSeries,
+    monthlyBrandLanguageSeries,
+    monthlyForecastByDate: { [currentMonthKey]: forecastTailJpy },
     topWorks,
     period: { from: from30, to: today },
   };

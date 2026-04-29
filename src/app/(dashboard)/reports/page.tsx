@@ -1,7 +1,9 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getAvailableMonths, getMonthlyReport } from '@/lib/queries/monthly-report';
 import { StackedBarChart } from '@/components/charts/StackedBarChart';
 import { HorizontalBarChart } from '@/components/charts/HorizontalBarChart';
+import { LanguageBrandFilterChart } from '@/components/charts/LanguageBrandFilterChart';
 import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
 import { ReportActions } from './ReportActions';
 import { MonthSelector } from './MonthSelector';
@@ -10,12 +12,6 @@ const PLATFORM_STACKS = [
   { dataKey: 'dlsite', label: 'DLsite', color: '#2563eb' },
   { dataKey: 'fanza', label: 'Fanza', color: '#dc2626' },
   { dataKey: 'youtube', label: 'YouTube', color: '#ef4444' },
-];
-const LANGUAGE_STACKS = [
-  { dataKey: '日本語', label: '日本語', color: '#2563eb' },
-  { dataKey: '英語', label: '英語', color: '#f59e0b' },
-  { dataKey: '中国語', label: '中国語', color: '#10b981' },
-  { dataKey: '韓国語', label: '韓国語', color: '#ec4899' },
 ];
 const BRAND_COLORS = { CAPURI: '#2563eb', BerryFeel: '#ec4899', BLsand: '#10b981' };
 const PLATFORM_COLORS = { DLsite: '#2563eb', Fanza: '#dc2626', YouTube: '#ef4444' };
@@ -59,7 +55,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-gray-800">月次レポート {month}</h1>
           <p className="text-xs md:text-sm text-gray-500 mt-1">
-            月単位の振り返り・エクスポート用。速報は <a href="/" className="text-blue-600 hover:underline">ダッシュボード</a> で
+            月単位の振り返り・エクスポート用。速報は <Link href="/" className="text-blue-600 hover:underline">ダッシュボード</Link> で
           </p>
         </div>
 
@@ -119,21 +115,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
         />
       </div>
 
-      {/* 日次推移グラフ（言語別） */}
-      <div className="bg-white rounded-lg shadow p-5 mb-6">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">日次推移（言語別）</h2>
-        <StackedBarChart
-          data={data.dailyLanguage.map((d) => ({
-            date: d.date.slice(5),
-            日本語: d.日本語,
-            英語: d.英語,
-            中国語: d.中国語,
-            韓国語: d.韓国語,
-          }))}
-          xKey="date"
-          stacks={LANGUAGE_STACKS}
-        />
-      </div>
+      <LanguageBrandFilterChart title="日次推移（言語別）" rows={data.dailyBrandLanguage} />
 
       {/* 3カラム（当月の構成比） */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -312,9 +294,9 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
               <tr key={w.work_id} className="border-b border-gray-100">
                 <td className="py-2 text-gray-500">{i + 1}</td>
                 <td className="py-2">
-                  <a href={`/works/${w.work_id}`} className="text-blue-600 hover:underline">
+                  <Link href={`/works/${w.work_id}`} className="text-blue-600 hover:underline">
                     {w.slug ?? w.title}
-                  </a>
+                  </Link>
                 </td>
                 <td className="py-2 text-gray-600">{w.brand}</td>
                 <td className="py-2 text-right">{w.salesCount.toLocaleString()}</td>
