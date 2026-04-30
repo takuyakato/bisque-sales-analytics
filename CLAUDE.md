@@ -52,6 +52,38 @@ npm run build        # 本番ビルド
 npm run lint         # ESLint
 ```
 
+## DB migration の適用（重要）
+
+スキーマ変更（テーブル・VIEW・関数の追加変更）は Supabase CLI 経由で行う。
+
+```bash
+# 1. 新しい migration ファイルを作成
+#    supabase/migrations/<番号>_<名前>.sql
+
+# 2. リモートDBに適用（履歴も schema_migrations に登録される）
+supabase db push
+
+# 3. PostgREST スキーマキャッシュは Supabase が自動更新
+#    （SQL Editor 手動実行時のような NOTIFY pgrst, 'reload schema' は不要）
+```
+
+セットアップ済み事項（2026-04-30 完了）：
+- Supabase CLI v2.x がローカルにインストール済み (`brew install supabase/tap/supabase`)
+- プロジェクトリンク済み（project-ref: `gvjkeruvqqgmverbavkt`）
+- 過去 migration 001〜011 は `supabase migration repair --status applied` で適用済みマーク完了
+- 認証情報は `~/.supabase/access-token` に保存
+
+トラブル時：
+- 401 認証エラー → 別ターミナルで `supabase login` を再実行
+- 「Cannot find project ref」 → `supabase link --project-ref gvjkeruvqqgmverbavkt`
+- migration がローカルとリモートでズレた → `supabase migration list` で差分確認 →
+  `supabase migration repair --status applied <version>` または
+  `supabase migration repair --status reverted <version>` で調整
+
+絶対やらないこと：
+- Supabase Dashboard SQL Editor で migration ファイルを手動実行しない
+  （CLI 履歴とズレる原因になるため）
+
 ## 認証
 - 共通パスワード認証（idea-cascade準拠）
 - Cookie: `bisque-analytics-auth=authenticated`
