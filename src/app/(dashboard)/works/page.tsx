@@ -306,19 +306,30 @@ async function ManageView({ params }: { params: Awaited<SearchParams> }) {
   if (workIds.length) {
     const { data: variants } = await supabase
       .from('product_variants')
-      .select('work_id')
+      .select('id, work_id')
       .in('work_id', workIds);
+
+    // variant_id → work_id マップ（migration 009 で sales_daily.work_id が
+    // DROP されたため、variant 経由で集計する）
+    const variantToWork = new Map<string, string>();
     for (const v of variants ?? []) {
-      if (v.work_id) variantCountMap[v.work_id] = (variantCountMap[v.work_id] ?? 0) + 1;
+      if (v.work_id) {
+        variantCountMap[v.work_id] = (variantCountMap[v.work_id] ?? 0) + 1;
+        variantToWork.set(v.id, v.work_id);
+      }
     }
 
-    const sales = await fetchAllPages<{ work_id: string | null; net_revenue_jpy: number | null }>(
-      supabase,
-      'sales_daily',
-      (q) => q.select('work_id, net_revenue_jpy').in('work_id', workIds)
-    );
-    for (const s of sales) {
-      if (s.work_id) revenueMap[s.work_id] = (revenueMap[s.work_id] ?? 0) + (s.net_revenue_jpy ?? 0);
+    const variantIds = Array.from(variantToWork.keys());
+    if (variantIds.length) {
+      const sales = await fetchAllPages<{ variant_id: string; net_revenue_jpy: number | null }>(
+        supabase,
+        'sales_daily',
+        (q) => q.select('variant_id, net_revenue_jpy').in('variant_id', variantIds)
+      );
+      for (const s of sales) {
+        const wid = variantToWork.get(s.variant_id);
+        if (wid) revenueMap[wid] = (revenueMap[wid] ?? 0) + (s.net_revenue_jpy ?? 0);
+      }
     }
   }
 
