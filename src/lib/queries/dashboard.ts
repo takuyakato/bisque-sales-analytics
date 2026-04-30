@@ -2,6 +2,12 @@ import { cache } from 'react';
 import { unstable_cache } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
 import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
+import {
+  jstToday, jstYmd,
+  addDays,
+  monthStartOf, monthEndOf,
+  offsetMonth, daysInMonthOf,
+} from '@/lib/utils/jst-date';
 
 /**
  * ダッシュボード系の集計クエリを 4 セクションに分割
@@ -11,26 +17,27 @@ import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
  *
  * 共通データ（前月以降の breakdown 行）は React.cache で 1 リクエスト内 dedup、
  * unstable_cache でクロスリクエスト 10 分キャッシュ。
+ *
+ * 全ての日付計算は JST 基準（jst-date util 経由）。
  */
 
-function fmtDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 function getDateRanges() {
-  const now = new Date();
-  const today = fmtDate(now);
-  const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
-  const from30 = fmtDate(d30);
-  const d60 = new Date(now); d60.setDate(d60.getDate() - 60);
-  const from60 = fmtDate(d60);
-  const monthStart = fmtDate(new Date(now.getFullYear(), now.getMonth(), 1));
-  const monthlyChartStart = fmtDate(new Date(now.getFullYear(), now.getMonth() - 23, 1));
-  const lastMonthStart = fmtDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const lastMonthEnd = fmtDate(new Date(now.getFullYear(), now.getMonth(), 0));
-  const lastMonthSameDay = fmtDate(new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()));
+  const today = jstToday();
+  const { year, month, day } = jstYmd();
+  const monthStart = monthStartOf(year, month);
+  const prevM = offsetMonth(year, month, -1);
+  const lastMonthStart = monthStartOf(prevM.year, prevM.month);
+  const lastMonthEnd = monthEndOf(prevM.year, prevM.month);
+  const startM = offsetMonth(year, month, -23);
+  const monthlyChartStart = monthStartOf(startM.year, startM.month);
+  const from30 = addDays(today, -30);
+  const from60 = addDays(today, -60);
+  // 前月同日（前月の最終日を超えないように clamp）
+  const clampedDay = Math.min(day, daysInMonthOf(prevM.year, prevM.month));
+  const lastMonthSameDay = `${prevM.year}-${String(prevM.month).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`;
   return {
-    now, today, from30, from60,
+    today, year, month, day,
+    from30, from60,
     monthStart, monthlyChartStart,
     lastMonthStart, lastMonthEnd, lastMonthSameDay,
   };
@@ -56,11 +63,12 @@ const _monthRangeCached = unstable_cache(
   async (_today: string): Promise<MonthRangeRow[]> => {
     const supabase = createServiceClient();
     const { lastMonthStart, today } = getDateRanges();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('daily_breakdown_summary')
       .select('sale_date, brand, platform, language, revenue')
       .gte('sale_date', lastMonthStart)
       .lte('sale_date', today);
+    if (error) throw new Error(`getMonthRangeRows: ${error.message}`);
     return (data ?? []) as MonthRangeRow[];
   },
   ['month-range-rows', 'v1'],
@@ -89,7 +97,7 @@ const _kpiCached = unstable_cache(
     const supabase = createServiceClient();
     const {
       from30, from60, today, monthStart,
-      lastMonthStart, lastMonthEnd, lastMonthSameDay, now,
+      lastMonthStart, lastMonthEnd, lastMonthSameDay, year, month,
     } = getDateRanges();
 
     const [last30Res, prev30Res, monthRangeRows] = await Promise.all([
@@ -105,6 +113,9 @@ const _kpiCached = unstable_cache(
         .lt('sale_date', from30),
       getMonthRangeRows(),
     ]);
+
+    if (last30Res.error) throw new Error(`KPI last30 fetch: ${last30Res.error.message}`);
+    if (prev30Res.error) throw new Error(`KPI prev30 fetch: ${prev30Res.error.message}`);
 
     const last30dJpy = (last30Res.data ?? []).reduce(
       (a, r) => a + Number(r.revenue ?? 0),
@@ -137,11 +148,7 @@ const _kpiCached = unstable_cache(
     const lastDataDate = datesWithData.length
       ? datesWithData[datesWithData.length - 1]
       : null;
-    const daysInThisMonth = new Date(
-      now.getFullYear(),
-      now.getMonth() + 1,
-      0
-    ).getDate();
+    const daysInThisMonth = daysInMonthOf(year, month);
     let daysRemaining = daysInThisMonth;
     if (lastDataDate && lastDataDate >= monthStart) {
       daysRemaining = daysInThisMonth - Number(lastDataDate.slice(8, 10));
@@ -199,11 +206,13 @@ const _dailyChartCached = unstable_cache(
     const supabase = createServiceClient();
     const { from30, today } = getDateRanges();
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('daily_breakdown_summary')
       .select('sale_date, brand, platform, language, revenue, sales_count')
       .gte('sale_date', from30)
       .lte('sale_date', today);
+
+    if (error) throw new Error(`Daily chart fetch: ${error.message}`);
 
     const rows = (data ?? []) as Array<{
       sale_date: string;
@@ -318,7 +327,7 @@ export const getMonthlyChartData = cache(() =>
 const _monthlyChartCached = unstable_cache(
   async (_today: string): Promise<MonthlyChartData> => {
     const supabase = createServiceClient();
-    const { monthlyChartStart, monthStart, now } = getDateRanges();
+    const { monthlyChartStart, monthStart, year, month } = getDateRanges();
 
     const [platRes, langRes, brandLangRes, monthRangeRows] = await Promise.all([
       supabase
@@ -336,6 +345,10 @@ const _monthlyChartCached = unstable_cache(
         .order('year_month', { ascending: true }),
       getMonthRangeRows(),
     ]);
+
+    if (platRes.error) throw new Error(`Monthly platform fetch: ${platRes.error.message}`);
+    if (langRes.error) throw new Error(`Monthly language fetch: ${langRes.error.message}`);
+    if (brandLangRes.error) throw new Error(`Monthly brand-language fetch: ${brandLangRes.error.message}`);
 
     const monthlyByPlatform = new Map<
       string,
@@ -425,11 +438,7 @@ const _monthlyChartCached = unstable_cache(
     const lastDataDate = datesWithData.length
       ? datesWithData[datesWithData.length - 1]
       : null;
-    const daysInThisMonth = new Date(
-      now.getFullYear(),
-      now.getMonth() + 1,
-      0
-    ).getDate();
+    const daysInThisMonth = daysInMonthOf(year, month);
     let daysRemaining = daysInThisMonth;
     if (lastDataDate && lastDataDate >= monthStart) {
       daysRemaining = daysInThisMonth - Number(lastDataDate.slice(8, 10));
@@ -515,7 +524,8 @@ export const getTopWorks = cache(() =>
 const _topWorksCached = unstable_cache(
   async (_today: string): Promise<TopWork[]> => {
     const supabase = createServiceClient();
-    const { data } = await supabase.rpc('get_top_works_d30', { top_n: 10 });
+    const { data, error } = await supabase.rpc('get_top_works_d30', { top_n: 10 });
+    if (error) throw new Error(`get_top_works_d30 RPC: ${error.message}`);
     return ((data ?? []) as Array<{
       work_id: string;
       title: string;

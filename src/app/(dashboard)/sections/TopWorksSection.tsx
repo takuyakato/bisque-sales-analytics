@@ -1,12 +1,19 @@
 import Link from 'next/link';
 import { getTopWorks } from '@/lib/queries/dashboard';
+import { ErrorMessage } from './Skeletons';
 
 function fmt(n: number): string {
   return `¥${n.toLocaleString()}`;
 }
 
 export async function TopWorksSection() {
-  const topWorks = await getTopWorks();
+  let topWorks;
+  try {
+    topWorks = await getTopWorks();
+  } catch (e) {
+    console.error('TopWorksSection error:', e);
+    return <ErrorMessage section="トップ10作品" message={e instanceof Error ? e.message : undefined} />;
+  }
   return (
     <div className="bg-white rounded-lg shadow p-5">
       <h2 className="text-sm font-semibold text-gray-700 mb-3">トップ10作品（直近30日）</h2>

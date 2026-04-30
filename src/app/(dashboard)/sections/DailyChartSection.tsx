@@ -1,6 +1,7 @@
 import { StackedBarChart } from '@/components/charts/StackedBarChart';
 import { LanguageBrandFilterChart } from '@/components/charts/LanguageBrandFilterChart';
 import { getDailyChartData } from '@/lib/queries/dashboard';
+import { ErrorMessage } from './Skeletons';
 
 const PLATFORM_STACKS = [
   { dataKey: 'dlsite', label: 'DLsite', color: '#2563eb' },
@@ -9,7 +10,13 @@ const PLATFORM_STACKS = [
 ];
 
 export async function DailyChartSection() {
-  const data = await getDailyChartData();
+  let data;
+  try {
+    data = await getDailyChartData();
+  } catch (e) {
+    console.error('DailyChartSection error:', e);
+    return <ErrorMessage section="直近30日チャート" message={e instanceof Error ? e.message : undefined} />;
+  }
   return (
     <>
       <div className="bg-white rounded-lg shadow p-5 mb-6">

@@ -1,7 +1,7 @@
 import { unstable_cache } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
-import { fetchAllPages } from './paginate';
 import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
+import { jstYmd } from '@/lib/utils/jst-date';
 
 export interface MonthlyReportData {
   month: string; // YYYY-MM
@@ -110,11 +110,10 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   const monthStart = `${ym}-01`;
   const monthEnd = lastDayOfMonth(ym);
 
-  // 現在月判定
-  const now = new Date();
-  const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  // 現在月判定（JST 基準）
+  const { year: nowYear, month: nowMonth, day: todayDay } = jstYmd();
+  const currentYm = `${nowYear}-${String(nowMonth).padStart(2, '0')}`;
   const isCurrentMonth = ym === currentYm;
-  const todayDay = now.getDate();
 
   // 前月・前年同月
   const [prevM, prevY] = [prevMonth(ym), prevYearSame(ym)];
@@ -128,16 +127,17 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     ? `${prevY}-${String(Math.min(todayDay, Number(prevYEnd.slice(8)))).padStart(2, '0')}`
     : prevYEnd;
 
+  // sumRange: daily_breakdown_summary（DB集計済み）から合計を取得
   const sumRange = async (from: string, to: string): Promise<number> => {
-    const rows = await fetchAllPages<{ revenue_jpy: number | null }>(
-      supabase,
-      'sales_unified_daily',
-      (q) => q.select('revenue_jpy').gte('sale_date', from).lte('sale_date', to)
-    );
-    return rows.reduce((a, r) => a + (r.revenue_jpy ?? 0), 0);
+    const { data } = await supabase
+      .from('daily_breakdown_summary')
+      .select('revenue')
+      .gte('sale_date', from)
+      .lte('sale_date', to);
+    return (data ?? []).reduce((a, r) => a + Number(r.revenue ?? 0), 0);
   };
 
-  // 当月データ（詳細）・前月合計・前年同月合計・前月同日まで・前年同月同日まで を並列取得
+  // 当月データ（詳細）・前月合計・前年同月合計・前月同日まで・前年同月同日まで・着地見込み・Top10 を並列取得
   // 現在月表示時は着地見込み算出用に前月末の10日間も追加取得（月初の精度対策）
   const forecastLookbackStart = (() => {
     if (!isCurrentMonth) return null;
@@ -146,36 +146,46 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   })();
 
-  const [monthRows, prevMonthTotal, prevYearTotal, prevMonthUntilSameDay, prevYearUntilSameDay, forecastLookbackRows] = await Promise.all([
-    fetchAllPages<{
-      sale_date: string;
-      brand: string;
-      platform: string;
-      language: string;
-      work_id: string;
-      revenue_jpy: number | null;
-      sales_count: number | null;
-    }>(
-      supabase,
-      'sales_unified_daily',
-      (q) =>
-        q
-          .select('sale_date, brand, platform, language, work_id, revenue_jpy, sales_count')
-          .gte('sale_date', monthStart)
-          .lte('sale_date', monthEnd)
-    ),
+  const [
+    monthRowsRes,
+    prevMonthTotal,
+    prevYearTotal,
+    prevMonthUntilSameDay,
+    prevYearUntilSameDay,
+    forecastLookbackRes,
+    topWorksRes,
+  ] = await Promise.all([
+    supabase
+      .from('daily_breakdown_summary')
+      .select('sale_date, brand, platform, language, revenue, sales_count')
+      .gte('sale_date', monthStart)
+      .lte('sale_date', monthEnd),
     sumRange(prevMStart, prevMEnd),
     sumRange(prevYStart, prevYEnd),
     sumRange(prevMStart, prevMUntilSameDay),
     sumRange(prevYStart, prevYUntilSameDay),
     forecastLookbackStart
-      ? fetchAllPages<{ sale_date: string; revenue_jpy: number | null }>(
-          supabase,
-          'sales_unified_daily',
-          (q) => q.select('sale_date, revenue_jpy').gte('sale_date', forecastLookbackStart).lt('sale_date', monthStart)
-        )
-      : Promise.resolve([] as { sale_date: string; revenue_jpy: number | null }[]),
+      ? supabase
+          .from('daily_breakdown_summary')
+          .select('sale_date, revenue')
+          .gte('sale_date', forecastLookbackStart)
+          .lt('sale_date', monthStart)
+      : Promise.resolve({ data: [] as Array<{ sale_date: string; revenue: number | null }> }),
+    supabase.rpc('get_top_works_month', { target_year_month: ym, top_n: 10 }),
   ]);
+
+  const monthRows = (monthRowsRes.data ?? []) as Array<{
+    sale_date: string;
+    brand: string;
+    platform: string;
+    language: string;
+    revenue: number | null;
+    sales_count: number | null;
+  }>;
+  const forecastLookbackRows = (forecastLookbackRes.data ?? []) as Array<{
+    sale_date: string;
+    revenue: number | null;
+  }>;
 
   let totalJpy = 0;
   let salesCount = 0;
@@ -186,11 +196,10 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   const dailyLangMap: Record<string, Record<string, number>> = {};
   const dailyBrandMap: Record<string, Record<string, number>> = {};
   const dailyBrandLangMap: Record<string, Record<string, Record<string, number>>> = {};
-  const byWork: Record<string, { revenue: number; salesCount: number }> = {};
 
-  for (const r of monthRows ?? []) {
-    const v = r.revenue_jpy ?? 0;
-    const c = r.sales_count ?? 0;
+  for (const r of monthRows) {
+    const v = Number(r.revenue ?? 0);
+    const c = Number(r.sales_count ?? 0);
     totalJpy += v;
     salesCount += c;
 
@@ -206,7 +215,6 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     byLanguage[r.language].revenue += v;
     byLanguage[r.language].salesCount += c;
 
-    // daily は実日付に、monthly は月初日の sale_date に載せる（日次内訳がない月も総額が見えるように）
     daily[r.sale_date] ??= { dlsite: 0, fanza: 0, youtube: 0 };
     const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
     if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
@@ -223,10 +231,6 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     dailyBrandLangMap[r.sale_date][r.brand] ??= {};
     dailyBrandLangMap[r.sale_date][r.brand][lang] =
       (dailyBrandLangMap[r.sale_date][r.brand][lang] ?? 0) + v;
-
-    byWork[r.work_id] ??= { revenue: 0, salesCount: 0 };
-    byWork[r.work_id].revenue += v;
-    byWork[r.work_id].salesCount += c;
   }
 
   const hasDailyData = monthRows.length > 0;
@@ -289,10 +293,10 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   if (isCurrentMonth) {
     const forecastDaily: Record<string, number> = {};
     for (const r of monthRows) {
-      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + (r.revenue_jpy ?? 0);
+      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + Number(r.revenue ?? 0);
     }
     for (const r of forecastLookbackRows) {
-      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + (r.revenue_jpy ?? 0);
+      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + Number(r.revenue ?? 0);
     }
     const datesWithData = Object.keys(forecastDaily).sort();
     const last3 = datesWithData.slice(-3);
@@ -309,26 +313,22 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   }
 
   // トップ10作品
-  const topWorkIds = Object.entries(byWork)
-    .sort((a, b) => b[1].revenue - a[1].revenue)
-    .slice(0, 10)
-    .map(([id]) => id);
-
-  const { data: worksMeta } = topWorkIds.length
-    ? await supabase.from('works').select('id, title, slug, brand').in('id', topWorkIds)
-    : { data: [] };
-
-  const topWorks: MonthlyReportData['topWorks'] = topWorkIds.map((id) => {
-    const meta = worksMeta?.find((w) => w.id === id);
-    return {
-      work_id: id,
-      title: meta?.title ?? id,
-      slug: meta?.slug ?? null,
-      brand: meta?.brand ?? 'unknown',
-      revenue: byWork[id].revenue,
-      salesCount: byWork[id].salesCount,
-    };
-  });
+  // トップ10作品（RPC get_top_works_month から取得済み）
+  const topWorks: MonthlyReportData['topWorks'] = ((topWorksRes.data ?? []) as Array<{
+    work_id: string;
+    title: string;
+    slug: string | null;
+    brand: string;
+    revenue: number | string;
+    sales_count: number | string;
+  }>).map((w) => ({
+    work_id: w.work_id,
+    title: w.title,
+    slug: w.slug,
+    brand: w.brand,
+    revenue: Number(w.revenue),
+    salesCount: Number(w.sales_count),
+  }));
 
   return {
     month: ym,

@@ -56,3 +56,23 @@ export function TableSkeleton() {
     </div>
   );
 }
+
+/**
+ * セクション単位のエラー表示（データ取得失敗時の明示）
+ * 0 表示にならず、ユーザーが「壊れている」と気付ける状態にする。
+ */
+export function ErrorMessage({ section, message }: { section: string; message?: string }) {
+  return (
+    <div className="bg-red-50 border border-red-200 rounded-lg shadow p-5 mb-6">
+      <h2 className="text-sm font-semibold text-red-700 mb-2">
+        ⚠️ {section} の取得に失敗しました
+      </h2>
+      <p className="text-xs text-red-600">
+        データソースに問題がある可能性があります。少し待って再読み込みしても直らない場合は、Supabase の状態を確認してください。
+      </p>
+      {message && (
+        <p className="text-xs text-red-500 mt-2 font-mono">{message}</p>
+      )}
+    </div>
+  );
+}

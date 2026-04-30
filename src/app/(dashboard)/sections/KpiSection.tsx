@@ -1,4 +1,5 @@
 import { getKpiData } from '@/lib/queries/dashboard';
+import { ErrorMessage } from './Skeletons';
 
 function fmt(n: number): string {
   return `¥${n.toLocaleString()}`;
@@ -22,7 +23,13 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
 }
 
 export async function KpiSection() {
-  const data = await getKpiData();
+  let data;
+  try {
+    data = await getKpiData();
+  } catch (e) {
+    console.error('KpiSection error:', e);
+    return <ErrorMessage section="KPI" message={e instanceof Error ? e.message : undefined} />;
+  }
   return (
     <>
       <div className="mb-6">

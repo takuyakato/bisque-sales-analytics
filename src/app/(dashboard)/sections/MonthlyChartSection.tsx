@@ -1,6 +1,7 @@
 import { StackedBarChart } from '@/components/charts/StackedBarChart';
 import { LanguageBrandFilterChart } from '@/components/charts/LanguageBrandFilterChart';
 import { getMonthlyChartData } from '@/lib/queries/dashboard';
+import { ErrorMessage } from './Skeletons';
 
 const MONTHLY_STACKS = [
   { dataKey: 'dlsite', label: 'DLsite', color: '#2563eb' },
@@ -10,7 +11,13 @@ const MONTHLY_STACKS = [
 ];
 
 export async function MonthlyChartSection() {
-  const data = await getMonthlyChartData();
+  let data;
+  try {
+    data = await getMonthlyChartData();
+  } catch (e) {
+    console.error('MonthlyChartSection error:', e);
+    return <ErrorMessage section="月次推移チャート" message={e instanceof Error ? e.message : undefined} />;
+  }
   return (
     <>
       <div className="bg-white rounded-lg shadow p-5 mb-6">
