@@ -3,7 +3,9 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { fetchAllPages } from '@/lib/queries/paginate';
 import { getWorksRanking, applyRankingFilter, type Period, type PlatformFilter } from '@/lib/queries/works-ranking';
 import { getCumulativeTotals, getMonthlySeriesAll } from '@/lib/queries/cumulative';
+import { getDuplicateWorkGroups } from '@/lib/queries/duplicates';
 import { StackedBarChart } from '@/components/charts/StackedBarChart';
+import { DuplicateCandidates } from './DuplicateCandidates';
 
 const PLATFORM_STACKS = [
   { dataKey: 'dlsite', label: 'DLsite', color: '#2563eb' },
@@ -282,6 +284,7 @@ function Pagination({ page, pageCount, params }: { page: number; pageCount: numb
 // ========== 手動管理画面 ==========
 async function ManageView({ params }: { params: Awaited<SearchParams> }) {
   const supabase = createServiceClient();
+  const duplicateGroups = await getDuplicateWorkGroups();
 
   let query = supabase
     .from('works')
@@ -333,6 +336,8 @@ async function ManageView({ params }: { params: Awaited<SearchParams> }) {
           ← 売上ランキングへ
         </Link>
       </div>
+
+      <DuplicateCandidates groups={duplicateGroups} />
 
       <form className="bg-white rounded-lg shadow p-4 mb-4 flex flex-wrap gap-3 items-end">
         <input type="hidden" name="view" value="manage" />
