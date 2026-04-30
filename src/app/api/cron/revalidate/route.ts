@@ -31,10 +31,7 @@ export async function POST(req: NextRequest) {
     // ボディ無し → デフォルト
   }
 
-  for (const t of tags) revalidateTag(t, 'max');
-
-  // MATERIALIZED VIEW 一式を REFRESH（データ更新時の最新化）
-  // monthly_*_summary + work_revenue_summary すべて
+  // 1. 先に MATERIALIZED VIEW を REFRESH（キャッシュ破棄前に新値を準備）
   let mvRefreshed = false;
   try {
     const supabase = createServiceClient();
@@ -44,6 +41,9 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     console.warn('MV refresh error:', e instanceof Error ? e.message : e);
   }
+
+  // 2. その後にキャッシュタグを破棄（次のアクセスから新MVが見える）
+  for (const t of tags) revalidateTag(t, 'max');
 
   return NextResponse.json({ ok: true, tags, mvRefreshed, at: new Date().toISOString() });
 }
