@@ -13,6 +13,11 @@ const PLATFORM_STACKS = [
   { dataKey: 'fanza', label: 'Fanza', color: '#dc2626' },
   { dataKey: 'youtube', label: 'YouTube', color: '#ef4444' },
 ];
+const BRAND_STACKS = [
+  { dataKey: 'CAPURI', label: 'CAPURI', color: '#2563eb' },
+  { dataKey: 'BerryFeel', label: 'BerryFeel', color: '#ec4899' },
+  { dataKey: 'BLsand', label: 'BLsand', color: '#10b981' },
+];
 const BRAND_COLORS = { CAPURI: '#2563eb', BerryFeel: '#ec4899', BLsand: '#10b981' };
 const PLATFORM_COLORS = { DLsite: '#2563eb', Fanza: '#dc2626', YouTube: '#ef4444' };
 const LANGUAGE_COLORS = { 日本語: '#2563eb', 英語: '#f59e0b', 中国語: '#10b981', 韓国語: '#ec4899' };
@@ -112,6 +117,21 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
           }))}
           xKey="date"
           stacks={PLATFORM_STACKS}
+        />
+      </div>
+
+      {/* 日次推移グラフ（レーベル別） */}
+      <div className="bg-white rounded-lg shadow p-5 mb-6">
+        <h2 className="text-sm font-semibold text-gray-700 mb-3">日次推移（レーベル別）</h2>
+        <StackedBarChart
+          data={data.dailyBrand.map((d) => ({
+            date: d.date.slice(5),
+            CAPURI: d.CAPURI,
+            BerryFeel: d.BerryFeel,
+            BLsand: d.BLsand,
+          }))}
+          xKey="date"
+          stacks={BRAND_STACKS}
         />
       </div>
 
