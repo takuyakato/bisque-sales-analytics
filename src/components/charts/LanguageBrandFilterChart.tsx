@@ -17,6 +17,8 @@ const LANGUAGE_STACKS = [
 ] satisfies StackDef[];
 const FORECAST_STACK = { dataKey: 'forecast', label: '着地見込み（予測）', color: '#9ca3af' } satisfies StackDef;
 
+const LANGUAGE_KEYS = ['日本語', '英語', '中国語', '韓国語'] as const;
+
 export interface DailyBrandLanguagePoint {
   date: string;
   brand: string;
@@ -29,11 +31,15 @@ export interface DailyBrandLanguagePoint {
 interface Props {
   title: string;
   rows: DailyBrandLanguagePoint[];
-  forecastByDate?: Record<string, number>;
+  /** 現在月のレーベル×言語別 着地見込み内訳 */
+  forecastByBrandLanguage?: Record<string, { 日本語: number; 英語: number; 中国語: number; 韓国語: number }>;
+  /** 現在月を示す date 値（rows の date と一致する） */
+  currentMonthKey?: string;
 }
 
-export function LanguageBrandFilterChart({ title, rows, forecastByDate = {} }: Props) {
+export function LanguageBrandFilterChart({ title, rows, forecastByBrandLanguage, currentMonthKey }: Props) {
   const [hiddenBrands, setHiddenBrands] = useState<Set<string>>(new Set());
+  const [hiddenStacks, setHiddenStacks] = useState<Set<string>>(new Set());
 
   const toggleBrand = (brand: string) => {
     setHiddenBrands((prev) => {
@@ -43,6 +49,17 @@ export function LanguageBrandFilterChart({ title, rows, forecastByDate = {} }: P
       return next;
     });
   };
+
+  const toggleStack = (key: string) => {
+    setHiddenStacks((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const hasForecast = Boolean(forecastByBrandLanguage && currentMonthKey);
 
   const chartData = useMemo(() => {
     const byDate = new Map<
@@ -70,8 +87,20 @@ export function LanguageBrandFilterChart({ title, rows, forecastByDate = {} }: P
       byDate.set(date, entry);
     }
 
-    for (const [dateKey, forecast] of Object.entries(forecastByDate)) {
-      const date = dateKey.length === 10 ? dateKey.slice(5) : dateKey;
+    if (hasForecast && currentMonthKey && forecastByBrandLanguage) {
+      const date = currentMonthKey.length === 10 ? currentMonthKey.slice(5) : currentMonthKey;
+      let forecast = 0;
+      if (!hiddenStacks.has('forecast')) {
+        for (const brand of BRAND_OPTIONS) {
+          if (hiddenBrands.has(brand.value)) continue;
+          const breakdown = forecastByBrandLanguage[brand.value];
+          if (!breakdown) continue;
+          for (const lang of LANGUAGE_KEYS) {
+            if (hiddenStacks.has(lang)) continue;
+            forecast += breakdown[lang] ?? 0;
+          }
+        }
+      }
       const entry =
         byDate.get(date) ??
         { date, 日本語: 0, 英語: 0, 中国語: 0, 韓国語: 0 };
@@ -80,11 +109,12 @@ export function LanguageBrandFilterChart({ title, rows, forecastByDate = {} }: P
     }
 
     return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
-  }, [forecastByDate, hiddenBrands, rows]);
+  }, [forecastByBrandLanguage, currentMonthKey, hasForecast, hiddenBrands, hiddenStacks, rows]);
 
-  const stacks = Object.keys(forecastByDate).length
-    ? [...LANGUAGE_STACKS, FORECAST_STACK]
-    : LANGUAGE_STACKS;
+  const stacks: StackDef[] = hasForecast ? [...LANGUAGE_STACKS, FORECAST_STACK] : [...LANGUAGE_STACKS];
+
+  // hiddenStacks は言語＋forecast の凡例制御。レーベルチップは別管理なので合算は不要。
+  const stacksHidden: Set<string> = hiddenStacks;
 
   return (
     <div className="bg-white rounded-lg shadow p-5 mb-6">
@@ -93,6 +123,8 @@ export function LanguageBrandFilterChart({ title, rows, forecastByDate = {} }: P
         data={chartData}
         xKey="date"
         stacks={stacks}
+        hidden={stacksHidden}
+        onToggleStack={toggleStack}
         legendBefore={
           <div className="flex flex-wrap justify-center gap-1">
             {BRAND_OPTIONS.map((option) => {
@@ -124,3 +156,4 @@ export function LanguageBrandFilterChart({ title, rows, forecastByDate = {} }: P
     </div>
   );
 }
+

@@ -26,6 +26,9 @@ interface Props {
   stacks: StackDef[];
   height?: number;
   legendBefore?: ReactNode;
+  /** 外部から hidden 状態を制御したい場合に渡す。未指定なら内部 state で管理 */
+  hidden?: Set<string>;
+  onToggleStack?: (key: string) => void;
 }
 
 /**
@@ -34,11 +37,16 @@ interface Props {
  *  - マウスオーバー時のツールチップに内訳＋合計を表示
  *  - Legend クリックで系列の表示/非表示切替、Y軸も自動調整
  */
-export function StackedBarChart({ data, xKey, stacks, height = 300, legendBefore }: Props) {
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
+export function StackedBarChart({ data, xKey, stacks, height = 300, legendBefore, hidden: controlledHidden, onToggleStack: controlledToggle }: Props) {
+  const [internalHidden, setInternalHidden] = useState<Set<string>>(new Set());
+  const hidden = controlledHidden ?? internalHidden;
 
   const toggleStack = (key: string) => {
-    setHidden((prev) => {
+    if (controlledToggle) {
+      controlledToggle(key);
+      return;
+    }
+    setInternalHidden((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);

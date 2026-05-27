@@ -1,4 +1,4 @@
-import { StackedBarChart } from '@/components/charts/StackedBarChart';
+import { MonthlyForecastChart } from '@/components/charts/MonthlyForecastChart';
 import { LanguageBrandFilterChart } from '@/components/charts/LanguageBrandFilterChart';
 import { getMonthlyChartData } from '@/lib/queries/dashboard';
 import { ErrorMessage } from './Skeletons';
@@ -35,27 +35,35 @@ export async function MonthlyChartSection() {
     }
     brandByMonth.set(r.date, entry);
   }
-  for (const [date, forecast] of Object.entries(data.monthlyForecastByDate)) {
-    const entry = brandByMonth.get(date) ?? { date, CAPURI: 0, BerryFeel: 0, BLsand: 0, forecast: 0 };
-    entry.forecast = forecast;
-    brandByMonth.set(date, entry);
-  }
   const monthlyBrandSeries = Array.from(brandByMonth.values()).sort((a, b) => a.date.localeCompare(b.date));
 
   return (
     <>
       <div className="bg-white rounded-lg shadow p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">月次推移（過去24か月・プラットフォーム別）</h2>
-        <StackedBarChart data={data.monthlySeries} xKey="date" stacks={MONTHLY_STACKS} />
+        <MonthlyForecastChart
+          data={data.monthlySeries}
+          xKey="date"
+          stacks={MONTHLY_STACKS}
+          currentMonthKey={data.currentMonthKey}
+          forecastByStack={data.forecastByPlatform}
+        />
       </div>
       <div className="bg-white rounded-lg shadow p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">月次推移（過去24か月・レーベル別）</h2>
-        <StackedBarChart data={monthlyBrandSeries} xKey="date" stacks={MONTHLY_BRAND_STACKS} />
+        <MonthlyForecastChart
+          data={monthlyBrandSeries}
+          xKey="date"
+          stacks={MONTHLY_BRAND_STACKS}
+          currentMonthKey={data.currentMonthKey}
+          forecastByStack={data.forecastByBrand}
+        />
       </div>
       <LanguageBrandFilterChart
         title="月次推移（過去24か月・言語別）"
         rows={data.monthlyBrandLanguageSeries}
-        forecastByDate={data.monthlyForecastByDate}
+        forecastByBrandLanguage={data.forecastByBrandLanguage}
+        currentMonthKey={data.currentMonthKey}
       />
     </>
   );

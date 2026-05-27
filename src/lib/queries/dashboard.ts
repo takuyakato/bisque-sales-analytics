@@ -318,6 +318,11 @@ export interface MonthlyChartData {
   monthlyLanguageSeries: MonthlyLanguagePoint[];
   monthlyBrandLanguageSeries: DailyBrandLanguagePoint[];
   monthlyForecastByDate: Record<string, number>;
+  /** 現在月の着地見込み内訳。フィルター連動の計算に使う */
+  currentMonthKey: string;
+  forecastByPlatform: { dlsite: number; fanza: number; youtube: number };
+  forecastByBrand: { CAPURI: number; BerryFeel: number; BLsand: number };
+  forecastByBrandLanguage: Record<string, { 日本語: number; 英語: number; 中国語: number; 韓国語: number }>;
 }
 
 export const getMonthlyChartData = cache(() =>
@@ -412,11 +417,32 @@ const _monthlyChartCached = unstable_cache(
     const currentMonthLanguage = { 日本語: 0, 英語: 0, 中国語: 0, 韓国語: 0 };
     const currentMonthBrandLang: Record<string, Record<string, number>> = {};
     const dailyRevenue: Record<string, number> = {};
+    const dailyByPlatform: Record<'dlsite' | 'fanza' | 'youtube', Record<string, number>> = {
+      dlsite: {}, fanza: {}, youtube: {},
+    };
+    const dailyByBrand: Record<'CAPURI' | 'BerryFeel' | 'BLsand', Record<string, number>> = {
+      CAPURI: {}, BerryFeel: {}, BLsand: {},
+    };
+    const dailyByBrandLang: Record<string, Record<string, Record<string, number>>> = {};
     for (const r of monthRangeRows) {
       const v = Number(r.revenue ?? 0);
-      dailyRevenue[r.sale_date] = (dailyRevenue[r.sale_date] ?? 0) + v;
-      if (r.sale_date >= monthStart) {
-        const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
+      const d = r.sale_date;
+      dailyRevenue[d] = (dailyRevenue[d] ?? 0) + v;
+      const p = r.platform as 'dlsite' | 'fanza' | 'youtube';
+      if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
+        dailyByPlatform[p][d] = (dailyByPlatform[p][d] ?? 0) + v;
+      }
+      const b = r.brand as 'CAPURI' | 'BerryFeel' | 'BLsand';
+      if (b === 'CAPURI' || b === 'BerryFeel' || b === 'BLsand') {
+        dailyByBrand[b][d] = (dailyByBrand[b][d] ?? 0) + v;
+        const lang = aggregatedLanguageLabel(r.language);
+        if (lang === '日本語' || lang === '英語' || lang === '中国語' || lang === '韓国語') {
+          dailyByBrandLang[b] ??= {};
+          dailyByBrandLang[b][lang] ??= {};
+          dailyByBrandLang[b][lang][d] = (dailyByBrandLang[b][lang][d] ?? 0) + v;
+        }
+      }
+      if (d >= monthStart) {
         if (p === 'dlsite' || p === 'fanza' || p === 'youtube') {
           currentMonthPlatform[p] += v;
         }
@@ -444,6 +470,29 @@ const _monthlyChartCached = unstable_cache(
       daysRemaining = daysInThisMonth - Number(lastDataDate.slice(8, 10));
     }
     const forecastTailJpy = Math.round(past3DaysAvg * daysRemaining);
+
+    const past3Avg = (map: Record<string, number>): number =>
+      last3.length ? last3.reduce((a, d) => a + (map[d] ?? 0), 0) / last3.length : 0;
+    const forecastByPlatform = {
+      dlsite: Math.round(past3Avg(dailyByPlatform.dlsite) * daysRemaining),
+      fanza: Math.round(past3Avg(dailyByPlatform.fanza) * daysRemaining),
+      youtube: Math.round(past3Avg(dailyByPlatform.youtube) * daysRemaining),
+    };
+    const forecastByBrand = {
+      CAPURI: Math.round(past3Avg(dailyByBrand.CAPURI) * daysRemaining),
+      BerryFeel: Math.round(past3Avg(dailyByBrand.BerryFeel) * daysRemaining),
+      BLsand: Math.round(past3Avg(dailyByBrand.BLsand) * daysRemaining),
+    };
+    const forecastByBrandLanguage: Record<string, { 日本語: number; 英語: number; 中国語: number; 韓国語: number }> = {};
+    for (const brand of ['CAPURI', 'BerryFeel', 'BLsand']) {
+      const bl = dailyByBrandLang[brand] ?? {};
+      forecastByBrandLanguage[brand] = {
+        日本語: Math.round(past3Avg(bl['日本語'] ?? {}) * daysRemaining),
+        英語: Math.round(past3Avg(bl['英語'] ?? {}) * daysRemaining),
+        中国語: Math.round(past3Avg(bl['中国語'] ?? {}) * daysRemaining),
+        韓国語: Math.round(past3Avg(bl['韓国語'] ?? {}) * daysRemaining),
+      };
+    }
 
     const currentMonthKey = monthStart.slice(0, 7);
     monthlyByPlatform.set(currentMonthKey, currentMonthPlatform);
@@ -499,9 +548,13 @@ const _monthlyChartCached = unstable_cache(
       monthlyLanguageSeries,
       monthlyBrandLanguageSeries,
       monthlyForecastByDate: { [currentMonthKey]: forecastTailJpy },
+      currentMonthKey,
+      forecastByPlatform,
+      forecastByBrand,
+      forecastByBrandLanguage,
     };
   },
-  ['monthly-chart-data', 'v1'],
+  ['monthly-chart-data', 'v2'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
