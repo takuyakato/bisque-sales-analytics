@@ -5,10 +5,13 @@
  * 判定: `product_variants` から参照されていない works
  * （Phase 2 で sales_daily.work_id を DROP 済みなので variants のみチェックでOK）
  */
-import { readFileSync } from 'fs';
-for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
-  const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-  if (m) process.env[m[1]] = m[2];
+import { existsSync, readFileSync } from 'fs';
+// CI（GitHub Actions）では .env.local が無いので存在時のみ読み込み、無ければ process.env を使う
+if (existsSync('.env.local')) {
+  for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (m) process.env[m[1]] = m[2];
+  }
 }
 import { createServiceClient } from '../src/lib/supabase/service';
 import { fetchAllPages } from '../src/lib/queries/paginate';

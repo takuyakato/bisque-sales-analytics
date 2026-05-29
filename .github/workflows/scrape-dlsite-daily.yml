@@ -36,6 +36,16 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           USD_JPY_RATE: ${{ vars.USD_JPY_RATE || '150' }}
 
+      - name: Link translations & cleanup orphans
+        if: success()
+        continue-on-error: true # DLsite API 不調でも日次パイプラインは止めない（翌日冪等に再試行）
+        run: |
+          npx tsx scripts/dlsite-link-translations.ts --apply
+          npx tsx scripts/cleanup-orphan-works.ts --apply
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4

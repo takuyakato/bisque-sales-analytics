@@ -4,19 +4,38 @@
  * 1. product_title をクリーンなものに更新
  * 2. language を options フィールドから確定的に判定して更新
  * 3. 翻訳版を JP 原作と同じ work_id に紐付け直す
+ * 4. JP原作が存在しない単独配信の翻訳は origin_status='standalone' を立てる
+ *
+ * API呼び出しは「チェックが必要な variant」だけに絞る（既定）：
+ *   - 未紐付けの翻訳（非ja かつ ja兄弟 work_id を持たず standalone でもない）
+ *   - 直近 N 日（既定7日）に新規作成された variant（タイトル・言語・紐付けの初期整備用）
+ * work_id 解決のための参照表は全 variant から作るので、絞り込んでも正しく紐付く。
  *
  * 使い方:
- *   npx tsx scripts/dlsite-link-translations.ts          # dry-run
- *   npx tsx scripts/dlsite-link-translations.ts --apply  # 反映
+ *   npx tsx scripts/dlsite-link-translations.ts                 # dry-run（絞り込み）
+ *   npx tsx scripts/dlsite-link-translations.ts --apply         # 反映（絞り込み）
+ *   npx tsx scripts/dlsite-link-translations.ts --apply --all   # 全 variant を再チェック
+ *   npx tsx scripts/dlsite-link-translations.ts --recent-days=14 # 新規判定の窓を変更
+ *
+ * CI（GitHub Actions）では .env.local が無いので、存在する場合のみ読み込み、
+ * 無ければ process.env（secrets 経由）をそのまま使う。
  */
-import { readFileSync } from 'fs';
-for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
-  const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-  if (m) process.env[m[1]] = m[2];
+import { existsSync, readFileSync } from 'fs';
+if (existsSync('.env.local')) {
+  for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (m) process.env[m[1]] = m[2];
+  }
 }
 import { createServiceClient } from '../src/lib/supabase/service';
 
 const APPLY = process.argv.includes('--apply');
+const SCAN_ALL = process.argv.includes('--all');
+const RECENT_DAYS = (() => {
+  const arg = process.argv.find((a) => a.startsWith('--recent-days='));
+  const n = arg ? Number(arg.split('=')[1]) : 7;
+  return Number.isFinite(n) && n >= 0 ? n : 7;
+})();
 
 interface ApiEdition {
   workno: string;
@@ -64,53 +83,79 @@ async function fetchProduct(workno: string): Promise<ApiResult | null> {
   }
 }
 
+interface V {
+  id: string;
+  work_id: string | null;
+  product_id: string;
+  language: string;
+  product_title: string | null;
+  origin_status: string | null;
+  created_at: string | null;
+  works: { brand: string };
+}
+
 (async () => {
   const s = createServiceClient();
 
-  // 対象: DLsite CAPURI/BerryFeel variants
+  // 全 DLsite CAPURI/BerryFeel variants を取得（work_id 参照表＋未紐付け判定の基礎）
   const { data: variants } = await s
     .from('product_variants')
-    .select('id, work_id, product_id, language, product_title, works!inner(brand)')
+    .select('id, work_id, product_id, language, product_title, origin_status, created_at, works!inner(brand)')
     .eq('platform', 'dlsite');
 
-  interface V {
-    id: string;
-    work_id: string | null;
-    product_id: string;
-    language: string;
-    product_title: string | null;
-    works: { brand: string };
-  }
-  const target = ((variants ?? []) as unknown as V[]).filter(
+  const all = ((variants ?? []) as unknown as V[]).filter(
     (v) => v.works.brand === 'CAPURI' || v.works.brand === 'BerryFeel'
   );
-  console.log(`対象variants: ${target.length}件\n`);
 
-  // APIから情報取得
+  // ja版が存在する work_id 集合（= 翻訳の紐付け先になりうる work）
+  const jaWorkIds = new Set(
+    all.filter((v) => v.language === 'ja' && v.work_id).map((v) => v.work_id as string)
+  );
+  const isUnlinkedTranslation = (v: V): boolean =>
+    v.language !== 'ja' &&
+    v.origin_status !== 'standalone' &&
+    !(v.work_id && jaWorkIds.has(v.work_id));
+
+  // API をかける対象を絞る：未紐付け翻訳 ∪ 直近作成
+  const recentCutoff = new Date(Date.now() - RECENT_DAYS * 86400000).toISOString();
+  const toCheck = SCAN_ALL
+    ? all
+    : all.filter(
+        (v) => isUnlinkedTranslation(v) || (v.created_at != null && v.created_at >= recentCutoff)
+      );
+
+  console.log(`全variants: ${all.length}件 / APIチェック対象: ${toCheck.length}件` +
+    (SCAN_ALL ? '（--all）' : `（未紐付け翻訳＋直近${RECENT_DAYS}日）`));
+
+  // work_id 参照表は「全 variant」から作る（古い既紐付けのJP原作も解決できるように）
+  const workIdByProductId = new Map<string, string>();
+  for (const v of all) {
+    if (v.work_id) workIdByProductId.set(v.product_id, v.work_id);
+  }
+
+  if (toCheck.length === 0) {
+    console.log('\nチェック対象なし。未紐付け翻訳は 0 件です。');
+    return;
+  }
+
+  // 対象だけ API 取得
   const apiByWorkno = new Map<string, ApiResult>();
-  for (let i = 0; i < target.length; i++) {
-    const v = target[i];
+  for (let i = 0; i < toCheck.length; i++) {
+    const v = toCheck[i];
     const result = await fetchProduct(v.product_id);
     if (result) apiByWorkno.set(v.product_id, result);
-    if ((i + 1) % 10 === 0) console.log(`  ${i + 1}/${target.length} 取得...`);
+    if ((i + 1) % 10 === 0) console.log(`  ${i + 1}/${toCheck.length} 取得...`);
     await new Promise((r) => setTimeout(r, 300)); // rate limit
   }
-  console.log(`API取得成功: ${apiByWorkno.size}/${target.length}\n`);
+  console.log(`API取得成功: ${apiByWorkno.size}/${toCheck.length}\n`);
 
-  // 各variantの原作（JP）を特定
-  // language_editions の中で lang='JPN' のものが原作
+  // 各 variant の原作（JP）を特定：language_editions の lang='JPN' が原作
   const jpOriginalOf = new Map<string, string>(); // translation RJ -> JP RJ
   for (const [rj, info] of apiByWorkno) {
     const jpEdition = info.language_editions?.find((e) => e.lang === 'JPN');
     if (jpEdition && jpEdition.workno !== rj) {
       jpOriginalOf.set(rj, jpEdition.workno);
     }
-  }
-
-  // JP variant の work_id を product_id でマップ（紐付け先の work_id を決定）
-  const workIdByProductId = new Map<string, string>();
-  for (const v of target) {
-    if (v.work_id) workIdByProductId.set(v.product_id, v.work_id);
   }
 
   // 更新案作成
@@ -120,12 +165,13 @@ async function fetchProduct(workno: string): Promise<ApiResult | null> {
     titleUpdate?: string;
     langUpdate?: string;
     workIdUpdate?: string;
+    originStatusUpdate?: string;
     currentLang: string;
     currentTitle: string;
     currentWorkId: string | null;
   }> = [];
 
-  for (const v of target) {
+  for (const v of toCheck) {
     const api = apiByWorkno.get(v.product_id);
     if (!api) continue;
 
@@ -145,6 +191,7 @@ async function fetchProduct(workno: string): Promise<ApiResult | null> {
     // 言語更新
     const newLang = langFromOptions(api.options);
     if (newLang !== v.language) u.langUpdate = newLang;
+    const effectiveLang = u.langUpdate ?? v.language;
 
     // work_id 紐付け変更（翻訳版の場合、JP原作のwork_idに変更）
     const jpOrig = jpOriginalOf.get(v.product_id);
@@ -153,15 +200,23 @@ async function fetchProduct(workno: string): Promise<ApiResult | null> {
       if (jpWorkId && jpWorkId !== v.work_id) {
         u.workIdUpdate = jpWorkId;
       }
+    } else if (effectiveLang !== 'ja') {
+      // 非ja なのに JPN edition が API に無い → DLsite上に日本語原作が存在しない単独配信
+      // （JPN edition はあるが原作が未取込のケースは jpOrig が立つのでここには来ない）
+      const hasJpEdition = (api.language_editions ?? []).some((e) => e.lang === 'JPN');
+      if (!hasJpEdition && v.origin_status !== 'standalone') {
+        u.originStatusUpdate = 'standalone';
+      }
     }
 
-    if (u.titleUpdate || u.langUpdate || u.workIdUpdate) updates.push(u);
+    if (u.titleUpdate || u.langUpdate || u.workIdUpdate || u.originStatusUpdate) updates.push(u);
   }
 
   console.log('=== 更新サマリ ===');
   console.log(`タイトル更新: ${updates.filter((u) => u.titleUpdate).length}件`);
   console.log(`言語更新: ${updates.filter((u) => u.langUpdate).length}件`);
   console.log(`work_id再紐付け: ${updates.filter((u) => u.workIdUpdate).length}件`);
+  console.log(`standalone マーク: ${updates.filter((u) => u.originStatusUpdate).length}件`);
 
   // 言語変更の内訳
   const langChanges: Record<string, number> = {};
@@ -171,8 +226,10 @@ async function fetchProduct(workno: string): Promise<ApiResult | null> {
       langChanges[key] = (langChanges[key] ?? 0) + 1;
     }
   }
-  console.log('\n=== 言語変更内訳 ===');
-  for (const [k, v] of Object.entries(langChanges)) console.log(`  ${k}: ${v}件`);
+  if (Object.keys(langChanges).length > 0) {
+    console.log('\n=== 言語変更内訳 ===');
+    for (const [k, v] of Object.entries(langChanges)) console.log(`  ${k}: ${v}件`);
+  }
 
   console.log('\n=== サンプル（更新対象 上位10） ===');
   for (const u of updates.slice(0, 10)) {
@@ -180,6 +237,7 @@ async function fetchProduct(workno: string): Promise<ApiResult | null> {
     if (u.titleUpdate) console.log(`    title: "${u.currentTitle.slice(0, 30)}" -> "${u.titleUpdate.slice(0, 30)}"`);
     if (u.langUpdate) console.log(`    lang: ${u.currentLang} -> ${u.langUpdate}`);
     if (u.workIdUpdate) console.log(`    work_id: ${u.currentWorkId} -> ${u.workIdUpdate}`);
+    if (u.originStatusUpdate) console.log(`    origin_status: -> ${u.originStatusUpdate}`);
   }
 
   if (!APPLY) {
@@ -195,12 +253,26 @@ async function fetchProduct(workno: string): Promise<ApiResult | null> {
     if (u.titleUpdate) patch.product_title = u.titleUpdate;
     if (u.langUpdate) patch.language = u.langUpdate;
     if (u.workIdUpdate) patch.work_id = u.workIdUpdate;
+    if (u.originStatusUpdate) patch.origin_status = u.originStatusUpdate;
     const { error } = await s.from('product_variants').update(patch).eq('id', u.variantId);
     if (error) console.error(`  ${u.productId} 失敗: ${error.message}`);
     else ok++;
   }
   console.log(`\n反映: ${ok}/${updates.length}件`);
 
-  // 孤立した works（誰も指していない）を掃除するのは別スクリプトで
-  console.log('\n※ 再紐付けで孤立した works レコードは sales_daily/product_variants の外部キー経由で手動削除が必要');
+  // 反映後の残り未紐付け件数を再判定（work_id 更新を反映した状態で）
+  const linkedNow = new Set(
+    updates.filter((u) => u.workIdUpdate).map((u) => u.variantId)
+  );
+  const standaloneNow = new Set(
+    updates.filter((u) => u.originStatusUpdate === 'standalone').map((u) => u.variantId)
+  );
+  const remaining = all.filter(
+    (v) => isUnlinkedTranslation(v) && !linkedNow.has(v.id) && !standaloneNow.has(v.id)
+  );
+  console.log(`残り未紐付け翻訳: ${remaining.length}件` +
+    (remaining.length > 0 ? '（JP原作が未取込の可能性。原作が取り込まれ次第、次回実行で自動紐付け）' : ''));
+
+  // 孤立した works（誰も指していない）は cleanup-orphan-works.ts で掃除する
+  console.log('\n※ 再紐付けで孤立した works は cleanup-orphan-works.ts --apply で削除してください');
 })();

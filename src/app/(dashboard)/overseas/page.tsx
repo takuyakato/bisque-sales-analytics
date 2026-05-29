@@ -208,7 +208,7 @@ async function _impl(): Promise<OverseasData> {
   // CAPURI/BerryFeel の DLsite variants
   const { data: variants } = await supabase
     .from('product_variants')
-    .select('id, work_id, product_id, language, product_title, works!inner(brand, title, slug)')
+    .select('id, work_id, product_id, language, product_title, origin_status, works!inner(brand, title, slug)')
     .eq('platform', 'dlsite');
 
   interface V {
@@ -217,6 +217,7 @@ async function _impl(): Promise<OverseasData> {
     product_id: string;
     language: string;
     product_title: string | null;
+    origin_status: string | null;
     works: { brand: string; title: string; slug: string | null };
   }
   const typed = (variants ?? []) as unknown as V[];
@@ -265,10 +266,12 @@ async function _impl(): Promise<OverseasData> {
   rows.sort((a, b) => b.revenue - a.revenue);
 
   // 紐付いていない非JA variants の集計（work_id がJPと同じでないもの）
+  // origin_status='standalone'（DLsite上に日本語原作が存在しない単独配信）は除外
   const jpWorkIds = new Set(jpVariants.map((v) => v.work_id).filter(Boolean));
   const unlinked = { total: 0, en: 0, zhHans: 0, zhHant: 0, ko: 0 };
   for (const v of brandFiltered) {
     if (v.language === 'ja') continue;
+    if (v.origin_status === 'standalone') continue; // 単独配信 → 紐付け対象外
     if (v.work_id && jpWorkIds.has(v.work_id)) continue; // JPと同じwork → 紐付け済み
     unlinked.total++;
     if (v.language === 'en') unlinked.en++;
