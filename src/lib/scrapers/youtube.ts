@@ -26,7 +26,7 @@ export interface YoutubeMetricRow {
  * チャンネルラベル（jp/en/ko）でOAuth認可を切替、動画一覧とanalytics日次値を取得
  */
 export class YoutubeScraper {
-  static readonly VERSION = '2026-04-20';
+  static readonly VERSION = '2026-05-26';
 
   private label: YoutubeChannelLabel;
   private clientId: string;
@@ -68,10 +68,12 @@ export class YoutubeScraper {
     this.analytics = google.youtubeAnalytics({ version: 'v2', auth: this.oauth2 });
 
     // チャンネル情報＋アップロードプレイリストID
-    const ch = await this.youtube.channels.list({
-      part: ['id', 'snippet', 'contentDetails'],
-      mine: true,
-    });
+    const ch = await this.withGoogleApiErrorContext('channels.list', () =>
+      this.youtube!.channels.list({
+        part: ['id', 'snippet', 'contentDetails'],
+        mine: true,
+      })
+    );
     const me = ch.data.items?.[0];
     if (!me) throw new Error('channels.list mine=true で結果なし');
     this.channelId = me.id ?? this.channelIdFromEnv;
@@ -87,15 +89,18 @@ export class YoutubeScraper {
     if (!this.youtube || !this.uploadsPlaylistId) await this.init();
     if (!this.uploadsPlaylistId) throw new Error('uploads playlist が取得できません');
 
+    const uploadsPlaylistId = this.uploadsPlaylistId;
     const videos: YoutubeVideo[] = [];
     let pageToken: string | undefined;
     while (videos.length < maxCount) {
-      const resp = await this.youtube!.playlistItems.list({
-        part: ['snippet', 'contentDetails'],
-        playlistId: this.uploadsPlaylistId,
-        maxResults: 50,
-        pageToken,
-      });
+      const resp = await this.withGoogleApiErrorContext('playlistItems.list', () =>
+        this.youtube!.playlistItems.list({
+          part: ['snippet', 'contentDetails'],
+          playlistId: uploadsPlaylistId,
+          maxResults: 50,
+          pageToken,
+        })
+      );
       for (const item of resp.data.items ?? []) {
         const videoId = item.contentDetails?.videoId;
         const title = item.snippet?.title;
@@ -126,11 +131,13 @@ export class YoutubeScraper {
     if (this.youtube) {
       for (let i = 0; i < videoIds.length; i += 50) {
         const chunk = videoIds.slice(i, i + 50);
-        const resp = await this.youtube.videos.list({
-          part: ['snippet'],
-          id: chunk,
-          maxResults: 50,
-        });
+        const resp = await this.withGoogleApiErrorContext('videos.list', () =>
+          this.youtube!.videos.list({
+            part: ['snippet'],
+            id: chunk,
+            maxResults: 50,
+          })
+        );
         for (const v of resp.data.items ?? []) {
           if (v.id && v.snippet?.title) titleMap.set(v.id, v.snippet.title);
         }
@@ -142,15 +149,17 @@ export class YoutubeScraper {
     for (let i = 0; i < videoIds.length; i += chunkSize) {
       const chunk = videoIds.slice(i, i + chunkSize);
       // monetary スコープ付与済みなら estimatedRevenue も取れる
-      const resp = await this.analytics.reports.query({
-        ids: 'channel==MINE',
-        startDate: from,
-        endDate: to,
-        dimensions: 'video,day',
-        metrics: 'views,estimatedMinutesWatched,subscribersGained,estimatedRevenue',
-        filters: `video==${chunk.join(',')}`,
-        maxResults: 10000,
-      });
+      const resp = await this.withGoogleApiErrorContext('analytics.reports.query', () =>
+        this.analytics!.reports.query({
+          ids: 'channel==MINE',
+          startDate: from,
+          endDate: to,
+          dimensions: 'video,day',
+          metrics: 'views,estimatedMinutesWatched,subscribersGained,estimatedRevenue',
+          filters: `video==${chunk.join(',')}`,
+          maxResults: 10000,
+        })
+      );
       const columnHeaders = resp.data.columnHeaders ?? [];
       const colIdx = (name: string) => columnHeaders.findIndex((c) => c.name === name);
       const iVideo = colIdx('video');
@@ -187,4 +196,86 @@ export class YoutubeScraper {
   getChannelName(): string | null {
     return this.channelName;
   }
+
+  private async withGoogleApiErrorContext<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        if (isInvalidGrantError(e)) {
+          const upper = this.label.toUpperCase();
+          throw new Error(
+            `YouTube OAuth refresh token が失効しています (${this.label}, ${operation})。` +
+            `scripts/youtube-oauth.ts ${this.label} で再認可し、` +
+            `YOUTUBE_REFRESH_TOKEN_${upper} を GitHub Secrets と .env.local に反映してください。` +
+            `Google Cloud の OAuth consent screen が Testing のままだと refresh token は約7日で失効します。` +
+            `本番運用では Publishing status を Production にしてください。`
+          );
+        }
+
+        if (attempt < maxAttempts && isRetryableGoogleApiError(e)) {
+          const waitMs = 1000 * attempt;
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+
+        throw addGoogleApiErrorContext(e, this.label, operation);
+      }
+    }
+    throw new Error(`YouTube API ${operation} がリトライ上限を超えました (${this.label})`);
+  }
+}
+
+function isInvalidGrantError(e: unknown): boolean {
+  const err = asGoogleApiError(e);
+  return (
+    err.response?.data?.error === 'invalid_grant' ||
+    err.message?.includes('invalid_grant') === true ||
+    err.response?.data?.error_description?.includes('expired or revoked') === true
+  );
+}
+
+function isRetryableGoogleApiError(e: unknown): boolean {
+  const err = asGoogleApiError(e);
+  const status = err.code ?? err.response?.status;
+  const reason = err.response?.data?.error;
+  return (
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    reason === 'rateLimitExceeded' ||
+    reason === 'quotaExceeded'
+  );
+}
+
+function addGoogleApiErrorContext(e: unknown, label: YoutubeChannelLabel, operation: string): Error {
+  const err = asGoogleApiError(e);
+  const status = err.code ?? err.response?.status;
+  const apiError = err.response?.data?.error;
+  const description = err.response?.data?.error_description;
+  const details = [
+    `YouTube API ${operation} が失敗しました (${label})`,
+    status ? `status=${status}` : null,
+    apiError ? `error=${apiError}` : null,
+    description ? `description=${description}` : null,
+    err.message ? `message=${err.message}` : null,
+  ].filter(Boolean);
+  return new Error(details.join(' / '));
+}
+
+function asGoogleApiError(e: unknown): Error & {
+  code?: number;
+  response?: {
+    status?: number;
+    data?: {
+      error?: string;
+      error_description?: string;
+    };
+  };
+} {
+  if (e instanceof Error) return e;
+  return new Error(String(e));
 }

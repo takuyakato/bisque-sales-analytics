@@ -23,6 +23,38 @@ function todayJst(): string {
   return t.toISOString().slice(0, 10);
 }
 
+function parseDate(date: string): Date {
+  return new Date(`${date}T00:00:00Z`);
+}
+
+function formatDate(date: Date): string {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function addDays(date: string, days: number): string {
+  const d = parseDate(date);
+  d.setUTCDate(d.getUTCDate() + days);
+  return formatDate(d);
+}
+
+function daysBetween(from: string, to: string): string[] {
+  const days: string[] = [];
+  let cur = from;
+  while (cur <= to) {
+    days.push(cur);
+    cur = addDays(cur, 1);
+  }
+  return days;
+}
+
+function analyticsSettledCutoff(): string {
+  // YouTube Analytics は日次値の確定に2〜3日かかるため、3日分まるごと経過した日までを検証対象にする
+  return addDays(todayJst(), -4);
+}
+
 function parseArgs() {
   const args: Record<string, string> = {};
   for (const a of process.argv.slice(3)) {
@@ -36,22 +68,31 @@ function parseArgs() {
  * 期間が長い場合は 15日ずつ（--chunk-days）に分割してAnalyticsの10000行制限を回避
  */
 function* dateChunks(from: string, to: string, chunkDays: number): Generator<{ from: string; to: string }> {
-  const start = new Date(from);
-  const end = new Date(to);
+  const start = parseDate(from);
+  const end = parseDate(to);
   let cur = new Date(start);
   while (cur <= end) {
     const chunkEnd = new Date(cur);
-    chunkEnd.setDate(chunkEnd.getDate() + chunkDays - 1);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + chunkDays - 1);
     if (chunkEnd > end) chunkEnd.setTime(end.getTime());
-    const fmt = (d: Date) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const da = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${da}`;
-    };
-    yield { from: fmt(cur), to: fmt(chunkEnd) };
+    yield { from: formatDate(cur), to: formatDate(chunkEnd) };
     cur = new Date(chunkEnd);
-    cur.setDate(cur.getDate() + 1);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+}
+
+function assertSettledDatesHaveMetrics(from: string, to: string, metrics: { metric_date: string }[]) {
+  const cutoff = analyticsSettledCutoff();
+  const settledDays = daysBetween(from, to).filter((d) => d <= cutoff);
+  if (settledDays.length === 0) return;
+
+  const datesWithMetrics = new Set(metrics.map((m) => m.metric_date));
+  const missing = settledDays.filter((d) => !datesWithMetrics.has(d));
+  if (missing.length === settledDays.length) {
+    throw new Error(
+      `YouTube Analytics の確定済み日付でメトリクスが0件です ` +
+      `(missing=${missing.join(',')}, settled_cutoff=${cutoff})`
+    );
   }
 }
 
@@ -74,12 +115,14 @@ async function runOne(label: YoutubeChannelLabel, from: string, to: string, chun
 
   let totalInserted = 0;
   let totalUpdated = 0;
+  let failedChunks = 0;
   const started = Date.now();
 
   for (let i = 0; i < chunks.length; i++) {
     const c = chunks[i];
     try {
       const metrics = await scraper.fetchDailyMetrics(c.from, c.to, videoIds);
+      assertSettledDatesHaveMetrics(c.from, c.to, metrics);
       const result = await ingestYoutubeMetrics({
         channelLabel: label,
         videos,
@@ -90,6 +133,12 @@ async function runOne(label: YoutubeChannelLabel, from: string, to: string, chun
       });
       totalInserted += result.inserted;
       totalUpdated += result.updated;
+      if (result.status !== 'success') {
+        throw new Error(
+          `取込ステータスが ${result.status} です ` +
+          `(skipped=${result.skipped}, error=${result.error_message ?? 'なし'})`
+        );
+      }
       const elapsed = (Date.now() - started) / 1000;
       const per = elapsed / (i + 1);
       const remain = Math.round((chunks.length - i - 1) * per);
@@ -98,8 +147,12 @@ async function runOne(label: YoutubeChannelLabel, from: string, to: string, chun
         `${c.from}〜${c.to}: +${result.inserted}行 / 経過${Math.round(elapsed / 60)}分 / 残り${Math.round(remain / 60)}分`
       );
     } catch (e) {
+      failedChunks += 1;
       console.warn(`  失敗 ${c.from}〜${c.to}:`, e instanceof Error ? e.message : e);
     }
+  }
+  if (failedChunks > 0) {
+    throw new Error(`${label}: ${failedChunks}/${chunks.length} チャンクの取得または取込に失敗しました`);
   }
   console.log(`\n=== ${label} 完了 ===`);
   console.log(`inserted: ${totalInserted}, updated: ${totalUpdated}`);
@@ -120,9 +173,7 @@ async function runOne(label: YoutubeChannelLabel, from: string, to: string, chun
   } else {
     const days = Number(args.days ?? 1);
     const t = todayJst();
-    const f = new Date();
-    f.setDate(f.getDate() - days);
-    from = f.toISOString().slice(0, 10);
+    from = addDays(t, -days);
     to = t;
   }
 

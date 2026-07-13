@@ -14,6 +14,11 @@
  *   4. スクリプトが自動でコードを受け取り、リフレッシュトークン取得
  *   5. トークン + channel_id をコンソール出力
  *   6. 加藤さんが .env.local に貼る
+ *
+ * 注意:
+ *   Google Cloud の OAuth consent screen が Testing のままだと、
+ *   発行した refresh token は約7日で失効する。
+ *   日次運用では Publishing status を Production にしてから再認可すること。
  */
 import { readFileSync } from 'fs';
 import http from 'http';
@@ -59,6 +64,7 @@ console.log(`\n=== YouTube OAuth 認可 (ラベル: ${label}) ===\n`);
 console.log('以下のURLをブラウザで開いて、対象チャンネルのGoogleアカウントで承認してください：\n');
 console.log(authUrl);
 console.log('\n（開くと警告が出ます → 「詳細」→ 「...に移動」で進んでください。テストアプリのため正常）\n');
+console.log('※ 同じトークンを日次運用する場合、Google Cloud の OAuth consent screen は Production にしてください。Testing のままだと約7日で失効します。\n');
 console.log(`ローカルサーバー起動中... (port ${port})\n`);
 
 const server = http.createServer(async (req, res) => {
