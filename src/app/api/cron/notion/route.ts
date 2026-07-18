@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { syncMonthToNotion } from '@/lib/notion/sync';
+import { hasValidCronBearer, hasValidSession } from '@/lib/auth/cron';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -22,11 +23,8 @@ function thisMonthJst(): string {
  */
 export async function POST(request: NextRequest) {
   try {
-    // CRON_SECRET が Authorization で来ている or middleware 経由の認証済みリクエスト
-    const auth = request.headers.get('authorization');
-    const cronSecret = process.env.CRON_SECRET;
-    if (auth && cronSecret && auth === `Bearer ${cronSecret}`) {
-      // cron経由、OK
+    if (!hasValidCronBearer(request) && !(await hasValidSession(request))) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     }
 
     const url = new URL(request.url);
