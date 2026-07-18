@@ -71,7 +71,7 @@ supabase db push
 - Supabase CLI v2.x がローカルにインストール済み (`brew install supabase/tap/supabase`)
 - プロジェクトリンク済み（project-ref: `gvjkeruvqqgmverbavkt`）
 - 過去 migration 001〜011 は `supabase migration repair --status applied` で適用済みマーク完了
-- 認証情報は `~/.supabase/access-token` に保存
+- 認証情報は Supabase CLI のログインセッションで管理（旧記載の `~/.supabase/access-token` は現存しない。401エラー時は `supabase login` を再実行）
 
 トラブル時：
 - 401 認証エラー → 別ターミナルで `supabase login` を再実行
@@ -136,5 +136,5 @@ supabase db push
 - `SPEC.md`: 詳細仕様（v3.6）
 - `docs/phase0-results.md`: Phase 0 検証結果
 - `/Users/takuyakato/projects/CLAUDE.md`: projects共通ルール
-- `/Users/takuyakato/CLAUDE.md`: 全社共通ルール
+- `/Users/takuyakato/.claude/CLAUDE.md`: 全社共通ルール
 - `/Users/takuyakato/vault/roadie/management/strategy/bisque/成人向けLive2D動画の海外展開戦略.md`: 連携対象の戦略ドキュメント
