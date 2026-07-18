@@ -26,14 +26,19 @@ export class ScraperLogger {
         source: 'scrape',
         target_date_from: targetFrom,
         target_date_to: targetTo,
-        status: 'success', // 仮、最終的に finish で上書き
+        status: 'running',
         source_version: this.sourceVersion,
         runner: this.runner,
       })
       .select('id')
       .single();
 
-    if (error || !data) throw new Error(`ingestion_log start failed: ${error?.message}`);
+    if (error || !data) {
+      const message = `ingestion_log start failed: ${error?.message ?? '行が返されませんでした'}`;
+      console.error(message);
+      process.exitCode = 1;
+      throw new Error(message);
+    }
     this.logId = data.id as string;
     return this.logId;
   }
@@ -48,7 +53,7 @@ export class ScraperLogger {
     screenshotPath?: string
   ) {
     if (!this.logId) return;
-    await this.supabase
+    const { error } = await this.supabase
       .from('ingestion_log')
       .update({
         status,
@@ -60,6 +65,13 @@ export class ScraperLogger {
         completed_at: new Date().toISOString(),
       })
       .eq('id', this.logId);
+
+    if (error) {
+      const message = `ingestion_log finish failed: ${error.message}`;
+      console.error(message);
+      process.exitCode = 1;
+      throw new Error(message);
+    }
   }
 
   /**

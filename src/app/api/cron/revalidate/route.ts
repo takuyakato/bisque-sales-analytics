@@ -3,6 +3,7 @@ import { revalidateTag } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 /**
  * キャッシュ破棄エンドポイント
@@ -55,6 +56,13 @@ export async function POST(req: NextRequest) {
     }
   }
   const mvRefreshed = Object.values(mvDetails).every(Boolean);
+
+  if (!mvRefreshed) {
+    const failed = Object.entries(mvDetails)
+      .filter(([, succeeded]) => !succeeded)
+      .map(([name]) => name);
+    return NextResponse.json({ ok: false, failed }, { status: 500 });
+  }
 
   // 2. その後にキャッシュタグを破棄（次のアクセスから新MVが見える）
   for (const t of tags) revalidateTag(t, 'max');

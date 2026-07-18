@@ -22,6 +22,29 @@ export interface IngestCsvOptions {
   runner?: string;
   /** どこから呼ばれたか */
   source?: 'csv-upload' | 'scrape' | 'api';
+  /** 呼出元が作成済みの ingestion_log ID。未指定時はこの関数が1行作成する */
+  ingestionLogId?: string;
+}
+
+export const EMPTY_ROWS_MESSAGE = '0行取得（サイト変更または正当な無売上日の可能性）';
+
+export type IngestionContractStatus = 'running' | IngestionStatus;
+
+export function determineIngestionStatus(rowCount: number, errorCount: number): IngestionStatus {
+  if (rowCount === 0) return 'partial';
+  if (errorCount === 0) return 'success';
+  return errorCount < rowCount ? 'partial' : 'failed';
+}
+
+export function isValidStatusTransition(
+  from: IngestionContractStatus,
+  to: IngestionContractStatus
+): boolean {
+  return from === 'running' && to !== 'running';
+}
+
+export function exitCodeForStatuses(statuses: IngestionStatus[]): number {
+  return statuses.every((status) => status === 'success') ? 0 : 1;
 }
 
 export interface IngestResult {
@@ -39,7 +62,7 @@ export interface IngestResult {
  * 標準化済みの売上行をSupabaseに書き込む
  *
  * 処理フロー：
- *   1. ingestion_log に進行中レコード作成
+ *   1. 呼出元の ingestion_log を利用、または進行中レコードを作成
  *   2. 各行について:
  *      - product_variants を upsert（既存なければ新規、works も同時に自動生成）
  *      - sales_daily に upsert（UNIQUE制約で冪等）
@@ -48,25 +71,27 @@ export interface IngestResult {
 export async function ingestCsvRows(options: IngestCsvOptions): Promise<IngestResult> {
   const supabase = createServiceClient();
 
-  // 1. ingestion_log 作成
-  const { data: logRow, error: logError } = await supabase
-    .from('ingestion_log')
-    .insert({
-      platform: options.platform,
-      source: options.source ?? 'csv-upload',
-      target_date_from: options.periodFrom,
-      target_date_to: options.periodTo,
-      status: 'success', // 仮、最後に更新
-      runner: options.runner ?? 'manual',
-    })
-    .select('id')
-    .single();
+  // 1. logger がある経路はそのIDを利用し、UI等の単独経路だけ自前で作成する
+  let ingestion_log_id = options.ingestionLogId;
+  if (!ingestion_log_id) {
+    const { data: logRow, error: logError } = await supabase
+      .from('ingestion_log')
+      .insert({
+        platform: options.platform,
+        source: options.source ?? 'csv-upload',
+        target_date_from: options.periodFrom,
+        target_date_to: options.periodTo,
+        status: 'running',
+        runner: options.runner ?? 'manual',
+      })
+      .select('id')
+      .single();
 
-  if (logError || !logRow) {
-    throw new Error(`ingestion_log 作成失敗: ${logError?.message}`);
+    if (logError || !logRow) {
+      throw new Error(`ingestion_log 作成失敗: ${logError?.message ?? '行が返されませんでした'}`);
+    }
+    ingestion_log_id = logRow.id as string;
   }
-
-  const ingestion_log_id = logRow.id as string;
 
   let inserted = 0;
   let updated = 0;
@@ -167,20 +192,26 @@ export async function ingestCsvRows(options: IngestCsvOptions): Promise<IngestRe
   }
 
   // 3. ingestion_log 更新
-  const status: IngestionStatus =
-    errors.length === 0 ? 'success' : errors.length < options.rows.length ? 'partial' : 'failed';
+  const status = determineIngestionStatus(options.rows.length, errors.length);
+  const errorMessage = options.rows.length === 0
+    ? EMPTY_ROWS_MESSAGE
+    : errors.length ? errors.slice(0, 5).join(' | ') : undefined;
 
-  await supabase
+  const { error: updateError } = await supabase
     .from('ingestion_log')
     .update({
       status,
       records_inserted: inserted,
       records_updated: updated,
       records_skipped: skipped,
-      error_message: errors.length ? errors.slice(0, 5).join(' | ') : null,
+      error_message: errorMessage ?? null,
       completed_at: new Date().toISOString(),
     })
     .eq('id', ingestion_log_id);
+
+  if (updateError) {
+    throw new Error(`ingestion_log 更新失敗: ${updateError.message}`);
+  }
 
   return {
     status,
@@ -190,7 +221,7 @@ export async function ingestCsvRows(options: IngestCsvOptions): Promise<IngestRe
     skipped,
     new_variants,
     new_works,
-    error_message: errors.length ? errors.slice(0, 5).join(' | ') : undefined,
+    error_message: errorMessage,
   };
 }
 

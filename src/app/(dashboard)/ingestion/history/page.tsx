@@ -38,6 +38,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Sear
           <label className="block text-xs text-gray-500 mb-1">ステータス</label>
           <select name="status" defaultValue={params.status ?? 'all'} className="px-3 py-1.5 border border-gray-300 rounded-md text-sm">
             <option value="all">すべて</option>
+            <option value="running">running</option>
             <option value="success">success</option>
             <option value="partial">partial</option>
             <option value="failed">failed</option>
@@ -106,6 +107,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Sear
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
+    running: 'bg-blue-100 text-blue-800',
     success: 'bg-green-100 text-green-800',
     partial: 'bg-yellow-100 text-yellow-800',
     failed: 'bg-red-100 text-red-800',

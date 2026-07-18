@@ -13,7 +13,7 @@ import path from 'path';
 import { DlsiteScraper } from '../src/lib/scrapers/dlsite';
 import { FanzaScraper } from '../src/lib/scrapers/fanza';
 import { parseCsv } from '../src/lib/csv-parser/index';
-import { ingestCsvRows } from '../src/lib/ingestion/csv-ingest';
+import { exitCodeForStatuses, ingestCsvRows } from '../src/lib/ingestion/csv-ingest';
 import { ScraperLogger } from '../src/lib/scrapers/base/logger';
 import { ScraperError } from '../src/lib/scrapers/base/errors';
 import type { BaseScraper } from '../src/lib/scrapers/base/scraper';
@@ -113,7 +113,7 @@ async function runDailyBackfillReusingBrowser(
   platform: Platform,
   dates: string[],
   version: string
-): Promise<void> {
+): Promise<Array<'success' | 'partial' | 'failed'>> {
   const ScraperClass = getScraperClass(platform);
   const scraper = new ScraperClass();
   const runnerLabel = process.env.GITHUB_ACTIONS ? 'github-actions' : 'manual';
@@ -123,6 +123,7 @@ async function runDailyBackfillReusingBrowser(
   let successCount = 0;
   let failedCount = 0;
   let totalInserted = 0;
+  const statuses: Array<'success' | 'partial' | 'failed'> = [];
 
   try {
     await scraper.launch();
@@ -156,6 +157,7 @@ async function runDailyBackfillReusingBrowser(
           periodTo: iso,
           source: 'scrape',
           runner: runnerLabel,
+          ingestionLogId: logger.getLogId() ?? undefined,
         });
         counts.inserted += ingestResult.inserted;
         counts.updated += ingestResult.updated;
@@ -171,6 +173,7 @@ async function runDailyBackfillReusingBrowser(
       } finally {
         await logger.finish(status, counts, errorMessage);
         if (status === 'success') successCount++;
+        statuses.push(status);
       }
 
       const elapsed = (Date.now() - started) / 1000;
@@ -191,6 +194,7 @@ async function runDailyBackfillReusingBrowser(
     console.log(`\n=== daily backfill 完了 ===`);
     console.log(`成功: ${successCount}/${dates.length} / 失敗: ${failedCount} / 追加行: ${totalInserted} / 所要: ${totalMin}分`);
   }
+  return statuses;
 }
 
 async function runScrapeOnce(platform: Platform, from: string, to: string, version: string) {
@@ -231,6 +235,7 @@ async function runScrapeOnce(platform: Platform, from: string, to: string, versi
       periodTo: to,
       source: 'scrape',
       runner: process.env.GITHUB_ACTIONS ? 'github-actions' : 'manual',
+      ingestionLogId: logger.getLogId() ?? undefined,
     });
     counts.inserted += ingestResult.inserted;
     counts.updated += ingestResult.updated;
@@ -246,8 +251,11 @@ async function runScrapeOnce(platform: Platform, from: string, to: string, versi
     logger.step('error', { message: errorMessage });
     screenshotPath = await scraper.captureErrorScreenshot('scrape-failed').catch(() => undefined);
   } finally {
-    await logger.finish(status, counts, errorMessage, screenshotPath);
-    await scraper.close();
+    try {
+      await logger.finish(status, counts, errorMessage, screenshotPath);
+    } finally {
+      await scraper.close();
+    }
   }
 
   return { status, counts, errorMessage, screenshotPath };
@@ -281,7 +289,7 @@ async function main() {
     console.log(`=== scraper:daily ${args.platform} (${from}) v${version} ===`);
     const r = await runScrapeOnce(args.platform, from, to, version);
     console.log('結果:', r);
-    if (r.status === 'failed') process.exitCode = 1;
+    process.exitCode = exitCodeForStatuses([r.status]);
     return;
   }
 
@@ -289,12 +297,15 @@ async function main() {
     if (!args.from || !args.to) throw new Error('backfill には --from=YYYY-MM --to=YYYY-MM が必須');
     console.log(`=== scraper:backfill ${args.platform} ${args.from}..${args.to} unit=${args.unit} v${version} ===`);
     if (args.unit === 'monthly') {
+      const statuses: Array<'success' | 'partial' | 'failed'> = [];
       for (const range of monthRange(args.from, args.to)) {
         console.log(`\n→ ${range.from} 〜 ${range.to}`);
         const r = await runScrapeOnce(args.platform, range.from, range.to, version);
         console.log('  結果:', r.status, r.counts);
+        statuses.push(r.status);
         await new Promise((res) => setTimeout(res, 1500));
       }
+      process.exitCode = exitCodeForStatuses(statuses);
     } else {
       // daily バックフィル：1回の launch/login でブラウザを使い回す
       // --from / --to は YYYY-MM（月単位）または YYYY-MM-DD（特定日範囲）
@@ -327,7 +338,8 @@ async function main() {
         dates.push(iso);
       }
       console.log(`対象範囲: ${dates[0]} 〜 ${dates[dates.length - 1]}（JST昨日 ${yStr} まで）`);
-      await runDailyBackfillReusingBrowser(args.platform, dates, version);
+      const statuses = await runDailyBackfillReusingBrowser(args.platform, dates, version);
+      process.exitCode = exitCodeForStatuses(statuses);
     }
   }
 }

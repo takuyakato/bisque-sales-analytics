@@ -17,7 +17,7 @@ export default async function IngestionTopPage() {
     .gte('started_at', sinceIso)
     .order('started_at', { ascending: false });
 
-  const statusCount = { success: 0, partial: 0, failed: 0 };
+  const statusCount = { running: 0, success: 0, partial: 0, failed: 0 };
   for (const r of recent ?? []) {
     statusCount[r.status as keyof typeof statusCount] =
       (statusCount[r.status as keyof typeof statusCount] ?? 0) + 1;
@@ -37,7 +37,8 @@ export default async function IngestionTopPage() {
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <Card label="直近24h 実行中" value={String(statusCount.running)} accent={statusCount.running > 0 ? 'blue' : undefined} />
         <Card label="直近24h 成功" value={String(statusCount.success)} />
         <Card label="直近24h 部分成功" value={String(statusCount.partial)} accent={statusCount.partial > 0 ? 'yellow' : undefined} />
         <Card label="直近24h 失敗" value={String(statusCount.failed)} accent={statusCount.failed > 0 ? 'red' : undefined} />
@@ -101,8 +102,8 @@ export default async function IngestionTopPage() {
   );
 }
 
-function Card({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: 'red' | 'yellow' }) {
-  const bg = accent === 'red' ? 'bg-red-50 border-red-200' : accent === 'yellow' ? 'bg-yellow-50 border-yellow-200' : 'bg-white';
+function Card({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: 'red' | 'yellow' | 'blue' }) {
+  const bg = accent === 'red' ? 'bg-red-50 border-red-200' : accent === 'yellow' ? 'bg-yellow-50 border-yellow-200' : accent === 'blue' ? 'bg-blue-50 border-blue-200' : 'bg-white';
   return (
     <div className={`rounded-lg shadow p-4 border ${bg}`}>
       <div className="text-xs text-gray-500 mb-1">{label}</div>
@@ -114,6 +115,7 @@ function Card({ label, value, sub, accent }: { label: string; value: string; sub
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
+    running: 'bg-blue-100 text-blue-800',
     success: 'bg-green-100 text-green-800',
     partial: 'bg-yellow-100 text-yellow-800',
     failed: 'bg-red-100 text-red-800',
