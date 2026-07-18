@@ -17,7 +17,7 @@ export interface YoutubeMetricRow {
   views: number;
   watch_time_minutes: number;
   subscribers_gained: number;
-  estimated_revenue_usd: number;
+  estimated_revenue_jpy: number;
   membership_revenue_usd: number;
 }
 
@@ -156,6 +156,7 @@ export class YoutubeScraper {
           endDate: to,
           dimensions: 'video,day',
           metrics: 'views,estimatedMinutesWatched,subscribersGained,estimatedRevenue',
+          currency: 'JPY',
           filters: `video==${chunk.join(',')}`,
           maxResults: 10000,
         })
@@ -182,7 +183,7 @@ export class YoutubeScraper {
           views: Number(r[iViews] ?? 0),
           watch_time_minutes: Number(r[iWatch] ?? 0),
           subscribers_gained: Number(r[iSubs] ?? 0),
-          estimated_revenue_usd: Number(r[iRev] ?? 0),
+          estimated_revenue_jpy: Number(r[iRev] ?? 0),
           membership_revenue_usd: 0, // Membership 収益は別メトリクス、必要なら別クエリ
         });
       }
