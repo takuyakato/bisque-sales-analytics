@@ -1,7 +1,12 @@
 import { unstable_cache } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
 import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
-import { jstYmd } from '@/lib/utils/jst-date';
+import {
+  computeForecast,
+  FORECAST_LOOKBACK_DAYS,
+  type ForecastResult,
+} from '@/lib/queries/forecast';
+import { addDays, jstYmd } from '@/lib/utils/jst-date';
 
 export interface MonthlyReportData {
   month: string; // YYYY-MM
@@ -22,6 +27,8 @@ export interface MonthlyReportData {
     yearOverYearSameDayPct: number | null;
     /** 現在月表示のとき：今月着地見込み（実績＋残日数×直近3日平均）。非現在月は null */
     expectedMonthEndJpy: number | null;
+    freshness: ForecastResult['freshness'] | null;
+    sla: ForecastResult['sla'] | null;
     /** 現在月表示のとき：着地見込みと前月総額の比較 % */
     expectedVsPrevMonthPct: number | null;
   };
@@ -101,7 +108,7 @@ function pct(a: number, b: number): number | null {
  */
 export const getMonthlyReport = unstable_cache(
   _getMonthlyReportImpl,
-  ['monthly-report', 'v3'],
+  ['monthly-report', 'v5'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
@@ -119,14 +126,6 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   const [prevM, prevY] = [prevMonth(ym), prevYearSame(ym)];
   const prevMStart = `${prevM}-01`, prevMEnd = lastDayOfMonth(prevM);
   const prevYStart = `${prevY}-01`, prevYEnd = lastDayOfMonth(prevY);
-  // 前月同日・前年同月同日（現在月表示のときのみ使う）
-  const prevMUntilSameDay = isCurrentMonth
-    ? `${prevM}-${String(Math.min(todayDay, Number(prevMEnd.slice(8)))).padStart(2, '0')}`
-    : prevMEnd;
-  const prevYUntilSameDay = isCurrentMonth
-    ? `${prevY}-${String(Math.min(todayDay, Number(prevYEnd.slice(8)))).padStart(2, '0')}`
-    : prevYEnd;
-
   // sumRange: daily_breakdown_summary（DB集計済み）から合計を取得
   const sumRange = async (from: string, to: string): Promise<number> => {
     const { data } = await supabase
@@ -137,21 +136,17 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     return (data ?? []).reduce((a, r) => a + Number(r.revenue ?? 0), 0);
   };
 
-  // 当月データ（詳細）・前月合計・前年同月合計・前月同日まで・前年同月同日まで・着地見込み・Top10 を並列取得
-  // 現在月表示時は着地見込み算出用に前月末の10日間も追加取得（月初の精度対策）
-  const forecastLookbackStart = (() => {
-    if (!isCurrentMonth) return null;
-    const [y, m] = ym.split('-').map(Number);
-    const d = new Date(y, m - 1, 1 - 10);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  })();
+  // 当月データ・比較対象・着地見込み・Top10 を並列取得する。
+  const forecastLookbackStart = isCurrentMonth
+    ? addDays(monthStart, -FORECAST_LOOKBACK_DAYS)
+    : null;
 
   const [
     monthRowsRes,
     prevMonthTotal,
     prevYearTotal,
-    prevMonthUntilSameDay,
-    prevYearUntilSameDay,
+    prevMonthAsOfRes,
+    prevYearAsOfRes,
     forecastLookbackRes,
     topWorksRes,
   ] = await Promise.all([
@@ -162,15 +157,29 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
       .lte('sale_date', monthEnd),
     sumRange(prevMStart, prevMEnd),
     sumRange(prevYStart, prevYEnd),
-    sumRange(prevMStart, prevMUntilSameDay),
-    sumRange(prevYStart, prevYUntilSameDay),
+    supabase
+      .from('daily_breakdown_summary')
+      .select('sale_date, platform, revenue')
+      .gte('sale_date', prevMStart)
+      .lte('sale_date', prevMEnd),
+    supabase
+      .from('daily_breakdown_summary')
+      .select('sale_date, platform, revenue')
+      .gte('sale_date', prevYStart)
+      .lte('sale_date', prevYEnd),
     forecastLookbackStart
       ? supabase
           .from('daily_breakdown_summary')
-          .select('sale_date, revenue')
+          .select('sale_date, brand, platform, language, revenue')
           .gte('sale_date', forecastLookbackStart)
           .lt('sale_date', monthStart)
-      : Promise.resolve({ data: [] as Array<{ sale_date: string; revenue: number | null }> }),
+      : Promise.resolve({ data: [] as Array<{
+          sale_date: string;
+          brand: string;
+          platform: string;
+          language: string;
+          revenue: number | null;
+        }> }),
     supabase.rpc('get_top_works_month', { target_year_month: ym, top_n: 10 }),
   ]);
 
@@ -184,8 +193,14 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
   }>;
   const forecastLookbackRows = (forecastLookbackRes.data ?? []) as Array<{
     sale_date: string;
+    brand: string;
+    platform: string;
+    language: string;
     revenue: number | null;
   }>;
+  type HistoricalRow = { sale_date: string; platform: string; revenue: number | null };
+  const prevMonthAsOfRows = (prevMonthAsOfRes.data ?? []) as HistoricalRow[];
+  const prevYearAsOfRows = (prevYearAsOfRes.data ?? []) as HistoricalRow[];
 
   let totalJpy = 0;
   let salesCount = 0;
@@ -287,29 +302,38 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
     }
   }
 
-  // 今月着地見込み：現在月のみ、取れている直近3日の平均 × 月末までの残日数
+  // 今月着地見込み：現在月のみ、PF別確定日を使ったセル単位の実績＋テール
   let expectedMonthEndJpy: number | null = null;
   let expectedVsPrevMonthPct: number | null = null;
+  let freshness: ForecastResult['freshness'] | null = null;
+  let sla: ForecastResult['sla'] | null = null;
+  let currentAsOfJpy = totalJpy;
+  let prevMonthUntilSameDay = prevMonthAsOfRows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+  let prevYearUntilSameDay = prevYearAsOfRows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
   if (isCurrentMonth) {
-    const forecastDaily: Record<string, number> = {};
-    for (const r of monthRows) {
-      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + Number(r.revenue ?? 0);
-    }
-    for (const r of forecastLookbackRows) {
-      forecastDaily[r.sale_date] = (forecastDaily[r.sale_date] ?? 0) + Number(r.revenue ?? 0);
-    }
-    const datesWithData = Object.keys(forecastDaily).sort();
-    const last3 = datesWithData.slice(-3);
-    const past3DaysAvg = last3.length
-      ? last3.reduce((a, d) => a + forecastDaily[d], 0) / last3.length
-      : 0;
-    const lastDataDate = datesWithData.length ? datesWithData[datesWithData.length - 1] : null;
-    let daysRemaining = daysInMonth;
-    if (lastDataDate && lastDataDate >= monthStart) {
-      daysRemaining = daysInMonth - Number(lastDataDate.slice(8, 10));
-    }
-    expectedMonthEndJpy = Math.round(totalJpy + past3DaysAvg * daysRemaining);
-    expectedVsPrevMonthPct = pct(expectedMonthEndJpy, prevMonthTotal);
+    const forecast = computeForecast([...forecastLookbackRows, ...monthRows].map((r) => ({
+      sale_date: r.sale_date,
+      platform: r.platform as 'dlsite' | 'fanza' | 'youtube',
+      brand: r.brand,
+      language: r.language,
+      revenue: Number(r.revenue ?? 0),
+    })), { year: nowYear, month: nowMonth, todayJst: `${currentYm}-${String(todayDay).padStart(2, '0')}` });
+    expectedMonthEndJpy = forecast.expectedMonthEndJpy;
+    freshness = forecast.freshness;
+    sla = forecast.sla;
+    currentAsOfJpy = forecast.actualJpy;
+    const sumAsOf = (rows: readonly HistoricalRow[], historicalMonthEnd: string): number => rows.reduce((sum, row) => {
+      const platform = row.platform as keyof ForecastResult['freshness'];
+      const cutoff = forecast.freshness[platform];
+      if (!cutoff) return sum;
+      const cutoffDay = Math.min(Number(cutoff.slice(8, 10)), Number(historicalMonthEnd.slice(8, 10)));
+      return Number(row.sale_date.slice(8, 10)) <= cutoffDay
+        ? sum + Number(row.revenue ?? 0)
+        : sum;
+    }, 0);
+    prevMonthUntilSameDay = sumAsOf(prevMonthAsOfRows, prevMEnd);
+    prevYearUntilSameDay = sumAsOf(prevYearAsOfRows, prevYEnd);
+    expectedVsPrevMonthPct = expectedMonthEndJpy === null ? null : pct(expectedMonthEndJpy, prevMonthTotal);
   }
 
   // トップ10作品
@@ -342,10 +366,12 @@ async function _getMonthlyReportImpl(ym: string): Promise<MonthlyReportData> {
       salesCount,
       prevMonthUntilSameDayJpy: prevMonthUntilSameDay,
       prevYearUntilSameDayJpy: prevYearUntilSameDay,
-      monthOverMonthSameDayPct: pct(totalJpy, prevMonthUntilSameDay),
-      yearOverYearSameDayPct: pct(totalJpy, prevYearUntilSameDay),
+      monthOverMonthSameDayPct: pct(currentAsOfJpy, prevMonthUntilSameDay),
+      yearOverYearSameDayPct: pct(currentAsOfJpy, prevYearUntilSameDay),
       expectedMonthEndJpy,
       expectedVsPrevMonthPct,
+      freshness,
+      sla,
     },
     byBrand: Object.entries(byBrand)
       .map(([brand, v]) => ({ brand, ...v }))

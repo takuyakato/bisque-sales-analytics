@@ -10,17 +10,21 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type Platform = 'dlsite' | 'fanza' | 'youtube';
+export type Platform = 'dlsite' | 'fanza' | 'youtube';
 type Method = 'method1' | 'method2' | 'method3' | 'method4';
 type Phase = '1〜5日' | '6〜15日' | '16日〜月末';
 
-type DailyRevenue = {
+export type DailyRevenue = {
   sale_date: string;
   platform: Platform;
   revenue: number;
 };
 
 type Forecasts = Record<Method, number>;
+
+export type ForecastCalculation = Forecasts & {
+  method3TailByPlatform: Record<Platform, number>;
+};
 
 type RawResult = {
   date: string;
@@ -116,11 +120,11 @@ function sumRange(
 }
 
 /** DBに依存しない、4方式の見込み計算。 */
-function calculateForecasts(
+export function calculateForecasts(
   rows: readonly DailyRevenue[],
   simulationDate: string,
   targetMonth: string
-): Forecasts {
+): ForecastCalculation {
   const index = createRevenueIndex(rows);
   const start = `${targetMonth}-01`;
   const end = monthEnd(targetMonth);
@@ -162,17 +166,19 @@ function calculateForecasts(
 
   let method3 = 0;
   let method4 = 0;
+  const method3TailByPlatform = { dlsite: 0, fanza: 0, youtube: 0 };
   for (const platform of PLATFORMS) {
     const cutoff = cutoffs[platform];
     const actual = sumRange(index, [platform], start, cutoff);
     const remaining = dayDifference(end, cutoff);
     const platformRate = sumRange(index, [platform], addDays(cutoff, -2), cutoff) / 3;
     const commonPlatformRate = sumRange(index, [platform], commonWindowStart, commonCutoff) / 3;
-    method3 += actual + platformRate * remaining;
+    method3TailByPlatform[platform] = platformRate * remaining;
+    method3 += actual + method3TailByPlatform[platform];
     method4 += actual + commonPlatformRate * remaining;
   }
 
-  return { method1, method2, method3, method4 };
+  return { method1, method2, method3, method4, method3TailByPlatform };
 }
 
 function runBacktest(rows: readonly DailyRevenue[], months: readonly string[]): RawResult[] {
@@ -345,7 +351,9 @@ async function main(): Promise<void> {
   await saveRawResults(results);
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

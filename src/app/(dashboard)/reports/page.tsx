@@ -5,6 +5,7 @@ import { StackedBarChart } from '@/components/charts/StackedBarChart';
 import { HorizontalBarChart } from '@/components/charts/HorizontalBarChart';
 import { LanguageBrandFilterChart } from '@/components/charts/LanguageBrandFilterChart';
 import { aggregatedLanguageLabel } from '@/lib/utils/language-label';
+import { jstToday } from '@/lib/utils/jst-date';
 import { ReportActions } from './ReportActions';
 import { MonthSelector } from './MonthSelector';
 
@@ -34,6 +35,11 @@ function pctLabel(p: number | null): string {
   if (p === null) return '—';
   const sign = p >= 0 ? '+' : '';
   return `${sign}${p.toFixed(1)}%`;
+}
+
+function freshnessLabel(freshness: NonNullable<Awaited<ReturnType<typeof getMonthlyReport>>['summary']['freshness']>): string {
+  const date = (value: string | null) => value ? `${Number(value.slice(5, 7))}/${Number(value.slice(8, 10))}` : '—';
+  return `反映済: DLsite ${date(freshness.dlsite)}・Fanza ${date(freshness.fanza)}・YouTube ${date(freshness.youtube)}`;
 }
 
 export default async function ReportsPage({ searchParams }: { searchParams: SearchParams }) {
@@ -85,7 +91,9 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
             <KpiCard
               label="今月着地見込み"
               value={data.summary.expectedMonthEndJpy !== null ? fmt(data.summary.expectedMonthEndJpy) : '—'}
-              sub={`前月: ${fmt(data.summary.prevMonthTotalJpy)} (${pctLabel(data.summary.expectedVsPrevMonthPct)})`}
+              sub={data.summary.expectedMonthEndJpy === null
+                ? 'データ停止のため算出不可'
+                : `前月: ${fmt(data.summary.prevMonthTotalJpy)} (${pctLabel(data.summary.expectedVsPrevMonthPct)})`}
             />
           </>
         ) : (
@@ -95,6 +103,19 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
           </>
         )}
       </div>
+      {data.isCurrentMonth && data.summary.freshness && data.summary.sla && (
+        <div className="-mt-4 mb-6 text-xs text-gray-500">
+          <div>{freshnessLabel(data.summary.freshness)}</div>
+          {(['dlsite', 'fanza', 'youtube'] as const).filter((platform) => data.summary.sla?.[platform] === 'warning').map((platform) => {
+            const label = { dlsite: 'DLsite', fanza: 'Fanza', youtube: 'YouTube' }[platform];
+            const currentDate = jstToday();
+            const age = data.summary.freshness?.[platform]
+              ? Math.round((Date.parse(`${currentDate}T00:00:00Z`) - Date.parse(`${data.summary.freshness[platform]}T00:00:00Z`)) / 86_400_000)
+              : 0;
+            return <span key={platform} className="inline-block mt-1 mr-1 rounded bg-amber-100 px-2 py-0.5 text-amber-800">{label}のデータが{age}日更新されていません</span>;
+          })}
+        </div>
+      )}
 
       {/* エクスポートアクション */}
       <ReportActions month={month} />
