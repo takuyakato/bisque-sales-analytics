@@ -107,12 +107,14 @@ supabase db push
 - 失敗時はスクショ自動保存（Supabase Storage + GA Artifact）
 - 動作モード：`daily` / `backfill` / `check`
 
-### Cron
-- GitHub Actions: `scrape-dlsite-daily.yml`（JST 05:00）、`scrape-fanza-daily.yml`（JST 05:15）
+### Cron（2026-07-21 実態）
+- GitHub Actions（取込 3本）: `scrape-dlsite-daily.yml`（JST 05:00）、`scrape-fanza-daily.yml`（JST 05:15）、`scrape-youtube-daily.yml`（JST 05:30）
+  - 各ワークフローは取込成功後の末尾で `scripts/refresh-mvs.ts`（集計MV 7本を順次REFRESH）→ `POST /api/cron/revalidate`（キャッシュ破棄）を実行
 - Vercel Cron（Hobby、2本まで）：
-  - `/api/cron/daily`（JST 05:30）YouTube + Snapshot
   - `/api/cron/notion`（JST 05:45）Notion sync
-- 実行前に `ingestion_log` で前工程成功を確認
+  - `/api/cron/snapshot`（JST 06:00）Snapshot生成
+- `/api/cron/revalidate` はCronではなくActions末尾から呼ばれる。MVリフレッシュはせずキャッシュタグ破棄のみ（`revalidateTag('sales-data', { expire: 0 })`）
+- MVリフレッシュRPCは service_role 専用（migration 022 で PUBLIC 実行権を剥奪）。単一MVのREFRESHが60秒を超えたらMV統合に着手（詳細は SPEC.md §6-5）
 
 ### Notion自動反映
 - block_id追跡方式（`notion_pages` テーブル）

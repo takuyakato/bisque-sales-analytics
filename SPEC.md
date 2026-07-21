@@ -2,7 +2,8 @@
 
 # bisque-sales-analytics 仕様書
 
-最終更新：2026-04-20（v3.6：残存内部矛盾5件＋技術論点4件＋改善2件を反映。認証Cookie詳細、`/ingestion` タブ分割、Fanza/DLsite スクレイピング仕様明記、環境変数同期チェックリスト。改訂履歴は末尾）
+最終更新：2026-07-21（v3.7：§6 Cron設計を実態に更新。YouTube取込もGitHub Actionsに統一、Vercel Cronはnotion/snapshotの2本、MVリフレッシュはActions側へ移設しrevalidateはキャッシュ破棄専用、単一MV60秒超で統合着手のトリガーを明記。§6-5新設）
+以前：2026-04-20（v3.6：残存内部矛盾5件＋技術論点4件＋改善2件を反映。認証Cookie詳細、`/ingestion` タブ分割、Fanza/DLsite スクレイピング仕様明記、環境変数同期チェックリスト。改訂履歴は末尾）
 
 ## 1. プロジェクト概要
 
@@ -721,54 +722,51 @@ YouTube Analytics API は過去データの遡及取得に制限がある可能�
 
 ## 6. Cron設計
 
-### 6-1. GitHub Actions Cron（スクレイピング系）
+> **注記（2026-07-21 実態反映）**: 当初計画では取込を Vercel Cron `/api/cron/daily` に集約する想定だったが、実装では **YouTube取込も GitHub Actions に統一**し、`/api/cron/daily` は作らなかった。以下は現行の実態。
+
+### 6-1. GitHub Actions Cron（取込＝スクレイピング／API系）
 ```
-scrape-dlsite-daily.yml : 日次 UTC 20:00 (JST 05:00)
-scrape-fanza-daily.yml  : 日次 UTC 20:15 (JST 05:15)
+scrape-dlsite-daily.yml  : 日次 UTC 20:00 (JST 05:00)
+scrape-fanza-daily.yml   : 日次 UTC 20:15 (JST 05:15)
+scrape-youtube-daily.yml : 日次 UTC 20:30 (JST 05:30、実行に約30分)
 ```
+各ワークフローは取込成功後の末尾で、以下2ステップを順に実行する（§6-5）:
+1. **Refresh materialized views**: `scripts/refresh-mvs.ts` で集計MV 7本を順次REFRESH（合計約76秒）
+2. **Revalidate Vercel cache**: `POST /api/cron/revalidate`（Bearer CRON_SECRET）でキャッシュタグ `sales-data` を破棄
 
 ### 6-2. Vercel Cron（軽量処理系、`vercel.json`）
 
-**タイムアウトリスク（60秒ギリギリ）回避のため、最初から Cron 2本に分離**。Vercel Hobby は Cron 2本まで無料で利用可能。
+Vercel Hobby は Cron 2本まで無料。現行は notion 同期と snapshot 生成の2本。
 
 ```json
 {
   "crons": [
-    { "path": "/api/cron/daily",  "schedule": "30 20 * * *" },
-    { "path": "/api/cron/notion", "schedule": "45 20 * * *" }
+    { "path": "/api/cron/notion",   "schedule": "45 20 * * *" },
+    { "path": "/api/cron/snapshot", "schedule": "0 21 * * *" }
   ]
 }
 ```
 
-#### `/api/cron/daily`（UTC 20:30 = JST 05:30、maxDuration=60）
-1. DLsite/Fanzaスクレイピング完了チェック（`ingestion_log` 参照、§6-4）
-2. YouTube API取得（20〜40秒）
-3. Snapshot生成（5秒）
-- 合計想定：**25〜50秒**
-
 #### `/api/cron/notion`（UTC 20:45 = JST 05:45、maxDuration=60）
-1. 当日分データ到着チェック（YouTube取込が完了したか）
-2. Notion月次ページ更新（§7-2、15〜30秒）
-- 合計想定：**20〜35秒**
+- 当月のNotion月次ページを同期（§7-2）。認可: Bearer CRON_SECRET または有効セッション＋Origin検証。
 
-**認可**：両ルートで `Authorization: Bearer $CRON_SECRET` を検証。
+#### `/api/cron/snapshot`（UTC 21:00 = JST 06:00、maxDuration=60）
+- スナップショット生成（`generateSnapshots()`）。認可: Bearer CRON_SECRET。
 
-**分離の利点**：
-- 片方が失敗しても他方は実行される
-- 各エンドポイントが単一責任、デバッグが容易
-- Notion API リトライに余裕を持って3〜4回試行できる
+#### `/api/cron/revalidate`（Cronではなく、GitHub Actions末尾から呼ばれる）
+- MVリフレッシュは行わず（P2でActions側へ移設）、キャッシュタグ破棄のみ。`revalidateTag(tag, { expire: 0 })` で取込直後の初回アクセスから最新を保証。maxDuration=60（応答は実測1秒台）。認可: Bearer CRON_SECRET。
 
 ### 6-3. 実行タイミング
 JST 05:00起点は**Phase 1i で実データで反映タイミングを確認**した後に最終調整。仮設定は05:00〜06:00帯、もし前日分が昼以降に反映される場合は10:00〜11:00に後ろ倒し。
 
 ### 6-4. 各ジョブの実行順序と遅延耐性
-- 順序：GitHub Actions（DLsite 5:00 → Fanza 5:15）→ Vercel Cron `/daily`（5:30）→ Vercel Cron `/notion`（5:45）
-- 間隔：各15分
+- 実態の順序：GitHub Actions（DLsite 5:00 → Fanza 5:15 → YouTube 5:30、各末尾でMVリフレッシュ＋revalidate）→ Vercel Cron `/notion`（5:45）→ Vercel Cron `/snapshot`（6:00）
+- 各取込は他工程の完了を待たず独立に走り、成功時のみ自分の取込ぶんを反映して即キャッシュ破棄する（一部が遅延・失敗しても他は最新化される）
 
-**完了チェックのロジック（疑似コード）**：
+> 以下の「完了チェック疑似コード」は当初計画（`/api/cron/daily` に取込を集約する案）の名残で、現行実装とは異なる。参考として残す。
 
 ```ts
-// /api/cron/daily の冒頭（YouTube+Snapshot 実行前にDLsite/Fanza完了確認）
+// （旧計画）/api/cron/daily の冒頭（YouTube+Snapshot 実行前にDLsite/Fanza完了確認）
 const yesterday = format(subDays(new Date(), 1), 'yyyy-MM-dd'); // JST基準
 const scrapeDone = await supabase.from('ingestion_log')
   .select('platform')
@@ -801,6 +799,22 @@ if (allDone.data.length < 3) {
 - スキップ時は `/ingestion` 画面に黄アラート表示
 - 加藤が `/ingestion/trigger` から再実行可能（Vercel API Route → GitHub Actions `workflow_dispatch` または `/api/cron/notion` 直接呼び出し）
 - 連続2日スキップされた場合は赤アラート
+
+### 6-5. MVリフレッシュとキャッシュ設計（2026-07-21 P2で確定）
+
+**背景**: ダッシュボードは集計MV 7本を参照する。当初は `/api/cron/revalidate` の中で7本を順次REFRESH（約76秒）していたが、Vercel関数の実行時間制限（60秒へ縮小した際に504障害が発生）に構造的に縛られていた。
+
+**現行設計**:
+- MVリフレッシュは **GitHub Actions側**（`scripts/refresh-mvs.ts`）で実行する。サーバーレスの時間制限を受けない。スクリプトは env検証・1本でも失敗すればexit 1・指数バックオフ再試行・MV別所要msの1行JSON出力を行う（冪等なので翌runで自己修復）。
+- `/api/cron/revalidate` は **キャッシュタグ破棄専用**（`revalidateTag('sales-data', { expire: 0 })`）。取込直後の初回アクセスから最新データを保証する。
+- MVリフレッシュRPCは `service_role` 専用（migration 022 で PUBLIC EXECUTE を剥奪。anonキーからは実行不可）。
+
+**対象MVとリフレッシュRPC（この順）**: `refresh_monthly_platform_summary` / `refresh_monthly_brand_summary` / `refresh_monthly_language_summary` / `refresh_monthly_brand_language_summary` / `refresh_daily_breakdown_summary` / `refresh_work_d30_summary` / `refresh_work_revenue_summary`
+
+**成長時の見直しトリガー（P3・観測ルール）**:
+- 各MVの所要時間は refresh-mvs.ts のJSONログで観測できる。
+- **単一MVのREFRESHが60秒を超えたら**、MV統合（現在7本ある集計を `daily_breakdown_summary` 基礎から導出する2本程度へ削減）に着手する。これに達するまでは現構成を維持する（statement_timeout は120秒。単一最大は現状17秒で余裕あり）。
+- リフレッシュ競合が問題化した場合は、GitHub Actions の concurrency group を共通化して直列化する（現状は各ワークフロー個別で、時刻分散により実害なし）。
 
 ---
 
