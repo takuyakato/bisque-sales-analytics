@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { revalidateTag } from 'next/cache';
-import { createServiceClient } from '@/lib/supabase/service';
 
 export const runtime = 'nodejs';
-// MV 7本の順次REFRESHは合計75秒超（2026-07-21実測）。60だと504になるためFluid上限の300に設定
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 /**
  * キャッシュ破棄エンドポイント
@@ -33,46 +31,11 @@ export async function POST(req: NextRequest) {
     // ボディ無し → デフォルト
   }
 
-  // 1. 先に MATERIALIZED VIEW を個別 RPC で順次 REFRESH
-  //    一括 refresh_all_summaries() でも動くが、1 個失敗しても他は続行できるよう個別に呼ぶ
-  const REFRESH_FUNCTIONS = [
-    'refresh_monthly_platform_summary',
-    'refresh_monthly_brand_summary',
-    'refresh_monthly_language_summary',
-    'refresh_monthly_brand_language_summary',
-    'refresh_daily_breakdown_summary',
-    'refresh_work_d30_summary',
-    'refresh_work_revenue_summary',
-  ];
-  const supabase = createServiceClient();
-  const mvDetails: Record<string, boolean> = {};
-  for (const fn of REFRESH_FUNCTIONS) {
-    try {
-      const { error } = await supabase.rpc(fn);
-      mvDetails[fn] = !error;
-      if (error) console.warn(`MV ${fn} failed:`, error.message);
-    } catch (e) {
-      mvDetails[fn] = false;
-      console.warn(`MV ${fn} error:`, e instanceof Error ? e.message : e);
-    }
-  }
-  const mvRefreshed = Object.values(mvDetails).every(Boolean);
-
-  if (!mvRefreshed) {
-    const failed = Object.entries(mvDetails)
-      .filter(([, succeeded]) => !succeeded)
-      .map(([name]) => name);
-    return NextResponse.json({ ok: false, failed }, { status: 500 });
-  }
-
-  // 2. その後にキャッシュタグを破棄（次のアクセスから新MVが見える）
-  for (const t of tags) revalidateTag(t, 'max');
+  for (const t of tags) revalidateTag(t, { expire: 0 });
 
   return NextResponse.json({
     ok: true,
     tags,
-    mvRefreshed,
-    mvDetails,
     at: new Date().toISOString(),
   });
 }

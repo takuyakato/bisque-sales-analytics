@@ -64,10 +64,17 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           USD_JPY_RATE: ${{ vars.USD_JPY_RATE || '150' }}
 
+      - name: Refresh materialized views
+        if: success()
+        run: npx tsx scripts/refresh-mvs.ts
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
       - name: Revalidate Vercel cache
         if: success()
         run: |
-          curl --fail-with-body -sS -X POST https://bisque-sales-analytics.vercel.app/api/cron/revalidate \
+          curl --fail-with-body -sS --retry 3 --max-time 30 -X POST https://bisque-sales-analytics.vercel.app/api/cron/revalidate \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -H "Content-Type: application/json" \
             -d '{"tags":["sales-data"]}'
