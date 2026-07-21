@@ -3,7 +3,8 @@ import { revalidateTag } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// MV 7本の順次REFRESHは合計75秒超（2026-07-21実測）。60だと504になるためFluid上限の300に設定
+export const maxDuration = 300;
 
 /**
  * キャッシュ破棄エンドポイント
