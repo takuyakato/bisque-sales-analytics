@@ -548,7 +548,7 @@ DLsite/Fanzaスクレイピングは**GitHub Actions**上で実行。Vercelの�
 **ワークフロー構成**（`.github/workflows/`）：
 ```
 ├── scrape-dlsite-daily.yml        # 日次 05:00 JST（前日分のみ）
-├── scrape-fanza-daily.yml         # 日次 05:15 JST（前日分のみ）
+├── scrape-fanza-daily.yml         # 日次 05:15 JST（反映1日遅れのため JST一昨日を最新日として直近3日を再UPSERT）
 ├── scrape-dlsite-backfill.yml     # 手動トリガー（過去分バッチ取込）
 ├── scrape-fanza-backfill.yml      # 手動トリガー（過去分バッチ取込）
 └── smoke-test-scrapers.yml        # 手動トリガー（スモークテスト）

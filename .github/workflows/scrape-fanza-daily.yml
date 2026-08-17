@@ -24,9 +24,11 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Run scraper (fanza daily)
         run: |
-          # Fanza は売上反映が遅れることがあるため、直近3日を毎日再UPSERTする
-          FROM="$(date -u -d '2 days ago' +%F)"
-          TO="$(date -u +%F)"
+          # Fanza は売上反映が1日遅れる（JST早朝時点では前日分CSVが空）ため、
+          # 反映済みの「JST一昨日」を最新日とし、そこから3日分を毎日再UPSERTする。
+          # 前日分を含めると 0行→partial→ジョブ失敗（誤アラート）になる（2026-08-17 修正）。
+          FROM="$(TZ=Asia/Tokyo date -d '4 days ago' +%F)"
+          TO="$(TZ=Asia/Tokyo date -d '2 days ago' +%F)"
           npm run scraper:backfill -- fanza --from="$FROM" --to="$TO" --unit=daily
         env:
           FANZA_USERNAME: ${{ secrets.FANZA_USERNAME }}
