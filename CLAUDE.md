@@ -139,4 +139,4 @@ supabase db push
 - `docs/phase0-results.md`: Phase 0 検証結果
 - `/Users/takuyakato/projects/CLAUDE.md`: projects共通ルール
 - `/Users/takuyakato/.claude/CLAUDE.md`: 全社共通ルール
-- `/Users/takuyakato/vault/roadie/management/strategy/bisque/成人向けLive2D動画の海外展開戦略.md`: 連携対象の戦略ドキュメント
+- `/Users/takuyakato/vault/roadie/bisque/strategy/overseas/成人向けLive2D動画の海外展開戦略.md`: 連携対象の戦略ドキュメント

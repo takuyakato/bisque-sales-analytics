@@ -981,7 +981,7 @@ jobs:
 - SQLクエリ直接（service role key使用、細かい集計が必要な時）
 
 **活用シナリオ**：
-- 戦略ドキュメント（例：`/Users/takuyakato/vault/roadie/management/strategy/bisque/成人向けLive2D動画の海外展開戦略.md`）の売上シミュレーション推測値を、最新実績で更新
+- 戦略ドキュメント（例：`/Users/takuyakato/vault/roadie/bisque/strategy/overseas/成人向けLive2D動画の海外展開戦略.md`）の売上シミュレーション推測値を、最新実績で更新
 - Claude Codeが `data/snapshots/latest/sales_by_language.csv` を読んで「直近3ヶ月の英語売上比率は X%」と引用
 
 ---
@@ -1362,7 +1362,7 @@ SUPABASE_SERVICE_ROLE_KEY
 - **OceanVeil / Coolmic / Laftel**等の海外プラットフォーム：APIまたはレポート取込先として追加
 - **為替換算の高度化**：固定レート→日次為替API連携。過去データは格納時の固定レートを保持、新規データのみ日次レート適用
 - **異常値検出・Slack通知**：前日比大幅減・取込失敗時にSlack通知
-- **海外展開戦略シミュレーション連携**：`/Users/takuyakato/vault/roadie/management/strategy/bisque/成人向けLive2D動画の海外展開戦略.md` の推測値を実績で更新
+- **海外展開戦略シミュレーション連携**：`/Users/takuyakato/vault/roadie/bisque/strategy/overseas/成人向けLive2D動画の海外展開戦略.md` の推測値を実績で更新
 - **多ユーザー化**：Supabase Auth 導入 or API Route経由取得に切り替え、RLSの厳格化
 
 ---
@@ -1385,7 +1385,7 @@ SUPABASE_SERVICE_ROLE_KEY
 - `CLAUDE.md`：プロジェクト固有の開発ガイド（AI向け）
 - `/Users/takuyakato/projects/CLAUDE.md`：projects共通ルール
 - `/Users/takuyakato/CLAUDE.md`：全社共通ルール
-- `/Users/takuyakato/vault/roadie/management/strategy/bisque/成人向けLive2D動画の海外展開戦略.md`：連携対象の戦略ドキュメント
+- `/Users/takuyakato/vault/roadie/bisque/strategy/overseas/成人向けLive2D動画の海外展開戦略.md`：連携対象の戦略ドキュメント
 
 ---
 
