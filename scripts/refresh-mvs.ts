@@ -87,6 +87,16 @@ async function main() {
   );
 
   if (failed > 0) process.exit(1);
+
+  const { data: monthlyCount, error: monthlyError } = await supabase.rpc('count_monthly_rows');
+  if (monthlyError) {
+    console.error(JSON.stringify({ check: 'monthly_rows', ok: false, error: monthlyError.message }));
+    process.exit(1);
+  }
+  const count = Number(monthlyCount ?? 0);
+  const ok = count === 0;
+  console.log(JSON.stringify({ check: 'monthly_rows', count, ok }));
+  if (!ok) process.exit(1);
 }
 
 main().catch((error) => {

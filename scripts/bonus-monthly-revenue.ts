@@ -10,10 +10,14 @@ import { fetchAllPages } from '../src/lib/queries/paginate';
   const s = createServiceClient();
   const from = '2025-01-01';
 
-  const rows = await fetchAllPages<{ sale_date: string; brand: string | null; platform: string; revenue: number | null }>(
+  const rows = await fetchAllPages<{ sale_date: string; brand: string | null; platform: string; language: string; revenue: number | null }>(
     s,
     'daily_breakdown_summary',
-    (q) => q.select('sale_date, brand, platform, revenue').gte('sale_date', from)
+    (q) => q.select('sale_date, brand, platform, language, revenue').gte('sale_date', from),
+    {
+      order: ['sale_date', 'brand', 'platform', 'language'],
+      uniqueKey: ['sale_date', 'brand', 'platform', 'language'],
+    }
   );
 
   const byMonth: Record<string, { total: number; brands: Record<string, number> }> = {};

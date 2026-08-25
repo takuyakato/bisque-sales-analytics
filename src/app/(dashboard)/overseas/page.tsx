@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { unstable_cache } from 'next/cache';
 import { createServiceClient } from '@/lib/supabase/service';
-import { fetchAllPages } from '@/lib/queries/paginate';
 
 type SearchParams = Promise<{
   brand?: string;
@@ -91,13 +90,13 @@ export default async function OverseasPage({ searchParams }: { searchParams: Sea
               <th className="text-center px-3 py-2">簡体字</th>
               <th className="text-center px-3 py-2">繁体字</th>
               <th className="text-center px-3 py-2">韓国語</th>
-              <th className="text-right px-3 py-2">累計売上</th>
+              <th className="text-right px-3 py-2">累計売上（全言語）</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.work_id} className="border-b border-gray-100 hover:bg-gray-50">
-                <td className="px-3 py-2 font-mono text-xs">{r.jpProductId}</td>
+                <td className="px-3 py-2 font-mono text-xs">{r.jaProductIds.join(', ')}</td>
                 <td className="px-3 py-2 max-w-md">
                   <Link href={`/works/${r.work_id}`} className="text-blue-600 hover:underline line-clamp-2" title={r.title}>
                     {r.title}
@@ -108,7 +107,12 @@ export default async function OverseasPage({ searchParams }: { searchParams: Sea
                 <td className="px-3 py-2 text-center">{r.hasZhHans ? <Mark /> : <Blank />}</td>
                 <td className="px-3 py-2 text-center">{r.hasZhHant ? <Mark /> : <Blank />}</td>
                 <td className="px-3 py-2 text-center">{r.hasKo ? <Mark /> : <Blank />}</td>
-                <td className="px-3 py-2 text-right font-semibold">¥{r.revenue.toLocaleString()}</td>
+                <td
+                  className="px-3 py-2 text-right font-semibold"
+                  title={`日本語版 ¥${r.revenueJa.toLocaleString()}`}
+                >
+                  ¥{r.revenueAll.toLocaleString()}
+                </td>
               </tr>
             ))}
             {rows.length === 0 && (
@@ -172,12 +176,13 @@ interface OverseasRow {
   work_id: string;
   title: string;
   brand: string;
-  jpProductId: string;
+  jaProductIds: string[];
   hasEn: boolean;
   hasZhHans: boolean;
   hasZhHant: boolean;
   hasKo: boolean;
-  revenue: number;
+  revenueJa: number;
+  revenueAll: number;
 }
 
 interface OverseasData {
@@ -198,86 +203,59 @@ async function getOverseasCoverage(): Promise<OverseasData> {
 
 const _cached = unstable_cache(
   async (_today: string) => _impl(),
-  ['overseas-coverage', 'v1'],
+  ['overseas-coverage', 'v2'],
   { revalidate: 600, tags: ['sales-data'] }
 );
 
 async function _impl(): Promise<OverseasData> {
   const supabase = createServiceClient();
+  const { data, error } = await supabase.rpc('get_overseas_coverage');
+  if (error) throw new Error(`海外展開データの取得に失敗しました: ${error.message}`);
 
-  // CAPURI/BerryFeel の DLsite variants
-  const { data: variants } = await supabase
-    .from('product_variants')
-    .select('id, work_id, product_id, language, product_title, origin_status, works!inner(brand, title, slug)')
-    .eq('platform', 'dlsite');
-
-  interface V {
-    id: string;
+  interface RpcRow {
+    kind: 'work' | 'unlinked';
     work_id: string | null;
-    product_id: string;
-    language: string;
-    product_title: string | null;
-    origin_status: string | null;
-    works: { brand: string; title: string; slug: string | null };
+    title: string | null;
+    brand: string | null;
+    ja_product_ids: string[] | null;
+    has_en: boolean | null;
+    has_zh_hans: boolean | null;
+    has_zh_hant: boolean | null;
+    has_ko: boolean | null;
+    revenue_ja_jpy: number | null;
+    revenue_all_lang_jpy: number | null;
+    language: string | null;
+    total_count: number;
   }
-  const typed = (variants ?? []) as unknown as V[];
-  const brandFiltered = typed.filter((v) => v.works.brand === 'CAPURI' || v.works.brand === 'BerryFeel');
-
-  // 累計売上（JP variantごと）を取得
-  const jpVariants = brandFiltered.filter((v) => v.language === 'ja');
-  const jpIds = jpVariants.map((v) => v.id);
-  const revenueMap: Record<string, number> = {};
-  if (jpIds.length > 0) {
-    const sales = await fetchAllPages<{ variant_id: string; net_revenue_jpy: number | null }>(
-      supabase,
-      'sales_daily',
-      (q) => q.select('variant_id, net_revenue_jpy').in('variant_id', jpIds)
-    );
-    for (const s of sales) {
-      revenueMap[s.variant_id] = (revenueMap[s.variant_id] ?? 0) + (s.net_revenue_jpy ?? 0);
-    }
+  const rpcRows = (data ?? []) as RpcRow[];
+  if (rpcRows.length > 0 && rpcRows.length !== Number(rpcRows[0].total_count)) {
+    throw new Error(`海外展開データが上限で欠落しました: expected=${rpcRows[0].total_count}, actual=${rpcRows.length}`);
   }
 
-  // work_id ごとに言語set構築
-  const langsByWork: Record<string, Set<string>> = {};
-  for (const v of brandFiltered) {
-    if (!v.work_id) continue;
-    langsByWork[v.work_id] ??= new Set();
-    langsByWork[v.work_id].add(v.language);
-  }
+  const rows: OverseasRow[] = rpcRows
+    .filter((row) => row.kind === 'work')
+    .map((row) => ({
+      work_id: row.work_id ?? '',
+      title: row.title ?? '',
+      brand: row.brand ?? '',
+      jaProductIds: row.ja_product_ids ?? [],
+      hasEn: row.has_en ?? false,
+      hasZhHans: row.has_zh_hans ?? false,
+      hasZhHant: row.has_zh_hant ?? false,
+      hasKo: row.has_ko ?? false,
+      revenueJa: Number(row.revenue_ja_jpy ?? 0),
+      revenueAll: Number(row.revenue_all_lang_jpy ?? 0),
+    }))
+    .sort((a, b) => b.revenueAll - a.revenueAll);
 
-  // JP variants を基準に行を作成
-  const rows: OverseasRow[] = jpVariants.map((v) => {
-    const langs = langsByWork[v.work_id ?? ''] ?? new Set();
-    return {
-      work_id: v.work_id ?? '',
-      title: v.product_title ?? v.works.title,
-      brand: v.works.brand,
-      jpProductId: v.product_id,
-      hasEn: langs.has('en'),
-      hasZhHans: langs.has('zh-Hans'),
-      hasZhHant: langs.has('zh-Hant'),
-      hasKo: langs.has('ko'),
-      revenue: revenueMap[v.id] ?? 0,
-    };
-  });
-
-  // 売上降順
-  rows.sort((a, b) => b.revenue - a.revenue);
-
-  // 紐付いていない非JA variants の集計（work_id がJPと同じでないもの）
-  // origin_status='standalone'（DLsite上に日本語原作が存在しない単独配信）は除外
-  const jpWorkIds = new Set(jpVariants.map((v) => v.work_id).filter(Boolean));
   const unlinked = { total: 0, en: 0, zhHans: 0, zhHant: 0, ko: 0 };
-  for (const v of brandFiltered) {
-    if (v.language === 'ja') continue;
-    if (v.origin_status === 'standalone') continue; // 単独配信 → 紐付け対象外
-    if (v.work_id && jpWorkIds.has(v.work_id)) continue; // JPと同じwork → 紐付け済み
+  for (const row of rpcRows) {
+    if (row.kind !== 'unlinked') continue;
     unlinked.total++;
-    if (v.language === 'en') unlinked.en++;
-    else if (v.language === 'zh-Hans') unlinked.zhHans++;
-    else if (v.language === 'zh-Hant') unlinked.zhHant++;
-    else if (v.language === 'ko') unlinked.ko++;
+    if (row.language === 'en') unlinked.en++;
+    else if (row.language === 'zh-Hans') unlinked.zhHans++;
+    else if (row.language === 'zh-Hant') unlinked.zhHant++;
+    else if (row.language === 'ko') unlinked.ko++;
   }
 
   return { rows, unlinked };

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidateTag } from 'next/cache';
 import { z } from 'zod';
 import { createServiceClient } from '@/lib/supabase/service';
 import { requireAuth } from '@/lib/auth/require';
@@ -97,6 +98,8 @@ export async function POST(
         await supabase.from('works').delete().eq('id', oldWorkId);
       }
     }
+
+    revalidateTag('sales-data', { expire: 0 });
 
     return NextResponse.json({ ok: true, work_id: newWorkId });
   } catch (e) {

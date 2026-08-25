@@ -58,7 +58,8 @@ async function _impl(): Promise<DuplicateGroup[]> {
   const variants = await fetchAllPages<DuplicateVariant & { work_id: string }>(
     s,
     'product_variants',
-    (q) => q.select('id, work_id, language, product_id, platform')
+    (q) => q.select('id, work_id, language, product_id, platform'),
+    { order: ['id'], uniqueKey: ['id'] }
   );
   const variantsByWork = new Map<string, DuplicateVariant[]>();
   for (const v of variants) {
@@ -68,18 +69,18 @@ async function _impl(): Promise<DuplicateGroup[]> {
     variantsByWork.set(v.work_id, list);
   }
 
-  const sales = await fetchAllPages<{ variant_id: string; net_revenue_jpy: number | null }>(
-    s,
-    'sales_daily',
-    (q) => q.select('variant_id, net_revenue_jpy')
-  );
-  const revByVariant = new Map<string, number>();
-  for (const sa of sales) {
-    revByVariant.set(
-      sa.variant_id,
-      (revByVariant.get(sa.variant_id) ?? 0) + (sa.net_revenue_jpy ?? 0)
-    );
+  const workIds = allWorks.map((work) => work.id);
+  const { data: totals, error: totalsError } = await s.rpc('get_work_revenue_totals', {
+    work_ids: workIds,
+  });
+  if (totalsError) throw new Error(`重複候補の売上取得に失敗しました: ${totalsError.message}`);
+  if (totals && totals.length > 0 && totals.length !== Number(totals[0].total_count)) {
+    throw new Error(`重複候補の売上が上限で欠落しました: expected=${totals[0].total_count}, actual=${totals.length}`);
   }
+  const typedTotals = (totals ?? []) as Array<{ work_id: string; revenue_jpy: number | null }>;
+  const revenueByWork = new Map(
+    typedTotals.map((total) => [total.work_id, Number(total.revenue_jpy ?? 0)] as const)
+  );
 
   const byKey = new Map<string, typeof allWorks>();
   for (const w of allWorks) {
@@ -96,13 +97,12 @@ async function _impl(): Promise<DuplicateGroup[]> {
     const members: DuplicateMember[] = list
       .map((w) => {
         const vs = variantsByWork.get(w.id) ?? [];
-        const rev = vs.reduce((a, v) => a + (revByVariant.get(v.id) ?? 0), 0);
         return {
           work_id: w.id,
           title: w.title,
           brand: w.brand,
           variants: vs,
-          totalRevenue: rev,
+          totalRevenue: revenueByWork.get(w.id) ?? 0,
         };
       })
       .sort((a, b) => b.totalRevenue - a.totalRevenue);

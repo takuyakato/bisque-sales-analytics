@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { createServiceClient } from '@/lib/supabase/service';
-import { fetchAllPages } from '@/lib/queries/paginate';
 import { getWorksRanking, applyRankingFilter, type Period, type PlatformFilter } from '@/lib/queries/works-ranking';
 import { getCumulativeTotals, getMonthlySeriesAll } from '@/lib/queries/cumulative';
 import { getDuplicateWorkGroups } from '@/lib/queries/duplicates';
@@ -304,32 +303,17 @@ async function ManageView({ params }: { params: Awaited<SearchParams> }) {
   const revenueMap: Record<string, number> = {};
 
   if (workIds.length) {
-    const { data: variants } = await supabase
-      .from('product_variants')
-      .select('id, work_id')
-      .in('work_id', workIds);
-
-    // variant_id → work_id マップ（migration 009 で sales_daily.work_id が
-    // DROP されたため、variant 経由で集計する）
-    const variantToWork = new Map<string, string>();
-    for (const v of variants ?? []) {
-      if (v.work_id) {
-        variantCountMap[v.work_id] = (variantCountMap[v.work_id] ?? 0) + 1;
-        variantToWork.set(v.id, v.work_id);
-      }
+    const { data: totals, error: totalsError } = await supabase.rpc(
+      'get_work_revenue_totals',
+      { work_ids: workIds }
+    );
+    if (totalsError) throw new Error(`作品売上の取得に失敗しました: ${totalsError.message}`);
+    if (totals && totals.length > 0 && totals.length !== Number(totals[0].total_count)) {
+      throw new Error(`作品売上が上限で欠落しました: expected=${totals[0].total_count}, actual=${totals.length}`);
     }
-
-    const variantIds = Array.from(variantToWork.keys());
-    if (variantIds.length) {
-      const sales = await fetchAllPages<{ variant_id: string; net_revenue_jpy: number | null }>(
-        supabase,
-        'sales_daily',
-        (q) => q.select('variant_id, net_revenue_jpy').in('variant_id', variantIds)
-      );
-      for (const s of sales) {
-        const wid = variantToWork.get(s.variant_id);
-        if (wid) revenueMap[wid] = (revenueMap[wid] ?? 0) + (s.net_revenue_jpy ?? 0);
-      }
+    for (const total of totals ?? []) {
+      revenueMap[total.work_id] = Number(total.revenue_jpy ?? 0);
+      variantCountMap[total.work_id] = Number(total.variant_count ?? 0);
     }
   }
 
