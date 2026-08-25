@@ -82,7 +82,7 @@
 ## 受け入れ基準
 - [ ] `npx tsc --noEmit` がエラー 0。`npm run lint` がエラー 0。
 - [ ] `git diff --check` がクリーン。
-- [ ] `grep -rn "from('sales_daily')" src/app src/lib` が 0 件（アプリ実行時コードから sales_daily 直接取得が消えている）。
+- [ ] `grep -n "from('sales_daily')" 'src/app/(dashboard)/overseas/page.tsx' 'src/app/(dashboard)/works/page.tsx' src/lib/queries/duplicates.ts` が 0 件（今回の変更対象3ファイルから sales_daily 直接取得が消えている。monthly-report.ts / csv-ingest.ts / works/[id]/page.tsx / ingestion/rollback は対象外）。
 - [ ] `grep -n "fetchAllPages" src/app src/lib -r` の結果が `paginate.ts` と `duplicates.ts`（product_variants、order/uniqueKey 指定あり）のみ。
 - [ ] migration 026 に 3 関数と REVOKE/GRANT があり、`SECURITY DEFINER` を含まない。
 - [ ] （Claude 側）`supabase db push` 成功後、`npx tsx scripts/verify-revenue-rpcs.ts --product RJ01630440` が `ALL OK` を出力し、RJ01630440 の work の全言語累計が (a) と一致する。
