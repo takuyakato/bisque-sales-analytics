@@ -22,7 +22,7 @@
 
 ## 未解決論点（要・加藤さん判断）
 1. 【決定 2026-08-26 加藤】海外展開タブの「累計売上」は**同一作品の全言語合算**にする。RPC は日本語版も返すので、列名は「累計売上（全言語）」とし、日本語版はツールチップ等で補助表示可。
-2. monthly バックフィルを再開する前に、daily/monthly の優先規則を決めて RPC と MV 群に同時適用する（現在 monthly 0 行のため急がない。併存検知は本修正で運用に入る）。
+2. 【決定 2026-08-26 加藤】月次CSV取込（monthly 行）は今後使わない。過去期間は daily で全カバー済み（DLsite 2022-02-10〜、Fanza 2025-11-20〜、YouTube 2020-05-06〜、monthly 0 行）を確認。よって優先規則の設計は不要。RPC・MV は daily のみを前提とし、取込後チェック（refresh-mvs.ts）は「monthly 行が 1 件でも存在したら exit 1」に単純化する。
 
 ## 判定結果
 - Codex との往復 3 回（上限）を消化。auditor 判定は「不合格（重大 2 件、いずれも仕様文の明確化で解消可）」。2 件は判定後に最終仕様へ反映したが、その反映は auditor の再判定を経ていない。
@@ -65,7 +65,7 @@
 - `api/variants/[id]/link/route.ts`：`revalidateTag('sales-data', { expire: 0 })` 追加。
 - `paginate.ts`：`opts: { order: string[]; uniqueKey?: string[] }` を必須引数化（未指定 throw）。exact count を先に取り必要ページのみ並列取得。ページエラーは throw。取得合計 ≠ count は throw。uniqueKey 指定時は複合キー重複で throw。JSDoc「金額集計は RPC を使う」。
 - スクリプト：bonus-monthly-revenue.ts（order = MV の UNIQUE INDEX 列）、data-coverage.ts（sales_daily order:['id'] へ書き換え）。他の診断スクリプトは未指定 throw で気付く運用。
-- `scripts/refresh-mvs.ts`：daily/monthly 併存チェックを追加（検知用 RPC `count_daily_monthly_overlap()` を migration 026 に同梱。1件以上で exit 1）。**チェックは Vercel キャッシュ破棄ステップの後段に置く**（検知失敗でキャッシュが古いまま残らないように）【auditor注意点反映】。
+- `scripts/refresh-mvs.ts`：daily/monthly monthly 行の混入チェックを追加（`aggregation_unit='monthly'` の件数を count、1件以上で exit 1。決定2により併存判定 RPC は不要）。**チェックは Vercel キャッシュ破棄ステップの後段に置く**（検知失敗でキャッシュが古いまま残らないように）【auditor注意点反映】。
 - `get_work_revenue_totals` に `variant_count` を含め、works/page.tsx L307-310 の product_variants 単発取得も廃止する【auditor注意点反映】。
 - Codex 発注文に「`fetchAllPages` の order 未指定 throw は仕様（削除系スクリプトが次回実行時に止まるのは意図どおり）」と明記。UNION ALL に `count(*) over()` を付けるには外側で包む。
 
