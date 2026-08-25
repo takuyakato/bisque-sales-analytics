@@ -21,7 +21,7 @@
 - auditor: 不合格（残2件はいずれも仕様文の明確化で塞がる小さなもの、設計の骨格は妥当）→ 2件（data-coverage.ts の YouTube 列を落とさない／unlinked の定義を現行ロジックどおり NOT EXISTS で明文化）と注意点3件を最終仕様に反映済み。
 
 ## 未解決論点（要・加藤さん判断）
-1. 海外展開タブの「累計売上」の既定表示を「日本語版のみ」（推奨・現行踏襲）にするか「同一作品の全言語合算」にするか。RPC は両方返すので UI だけで切替可能。
+1. 【決定 2026-08-26 加藤】海外展開タブの「累計売上」は**同一作品の全言語合算**にする。RPC は日本語版も返すので、列名は「累計売上（全言語）」とし、日本語版はツールチップ等で補助表示可。
 2. monthly バックフィルを再開する前に、daily/monthly の優先規則を決めて RPC と MV 群に同時適用する（現在 monthly 0 行のため急がない。併存検知は本修正で運用に入る）。
 
 ## 判定結果
@@ -60,7 +60,7 @@
 - 属性: `LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp`、`public.` 修飾、`REVOKE EXECUTE ... FROM PUBLIC; GRANT EXECUTE ... TO service_role`。
 
 ### アプリ
-- `overseas/page.tsx`：RPC 1 のみで描画。`error` は throw、受信行数 ≠ total_count は throw。product_variants / sales_daily の直接取得を削除。キャッシュキー `['overseas-coverage','v2']`。列名「累計売上（日本語版）」。React key は work_id。
+- `overseas/page.tsx`：RPC 1 のみで描画。`error` は throw、受信行数 ≠ total_count は throw。product_variants / sales_daily の直接取得を削除。キャッシュキー `['overseas-coverage','v2']`。列名「累計売上（全言語）」（既定は revenue_all_lang_jpy。決定 2026-08-26）。React key は work_id。
 - `works/page.tsx`・`lib/queries/duplicates.ts`：RPC 2 で売上取得、sales_daily 直接取得を削除。duplicates の variant 明細は `fetchAllPages(..., { order:['id'], uniqueKey:['id'] })`。
 - `api/variants/[id]/link/route.ts`：`revalidateTag('sales-data', { expire: 0 })` 追加。
 - `paginate.ts`：`opts: { order: string[]; uniqueKey?: string[] }` を必須引数化（未指定 throw）。exact count を先に取り必要ページのみ並列取得。ページエラーは throw。取得合計 ≠ count は throw。uniqueKey 指定時は複合キー重複で throw。JSDoc「金額集計は RPC を使う」。
